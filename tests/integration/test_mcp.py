@@ -233,7 +233,11 @@ async def test_i06_broker_restart_invalidates_lease(broker, tmp_path):
             from superuse.app import Broker
             from superuse.config import load_config
 
-            replacement = Broker(load_config(), runtime_dir=broker.runtime_dir, web_dir=None)
+            replacement = Broker(
+                load_config(overrides={"device": {"mode": "simulated"}}),
+                runtime_dir=broker.runtime_dir,
+                web_dir=None,
+            )
             await replacement.start()
             await replacement.wait_healthy(timeout_s=10)
 

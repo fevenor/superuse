@@ -120,6 +120,9 @@ def prepare_release(bundle: Path, stage: Path) -> None:
     for name in ("LICENSE", "NOTICE.md", "config.example.toml"):
         shutil.copy2(ROOT / name, stage / name)
     shutil.copy2(ROOT / "packaging/PORTABLE.md", stage / "PORTABLE.md")
+    shutil.copy2(ROOT / "packaging/MCP.md", stage / "MCP.md")
+    for name in ("mcp-client.example.json", "mcp-client-http.example.json"):
+        shutil.copy2(ROOT / "examples" / name, stage / name)
     # Empty directory is the mode selector; never ship a user's configuration,
     # runtime credentials, logs, or latch. Empty directories survive in the ZIP.
     (stage / "data").mkdir()

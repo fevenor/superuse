@@ -27,6 +27,7 @@
   </select>
   <button id="btnScale" title="切换 1:1 / 适应">1:1</button>
   <button id="btnFs" title="全屏">全屏</button>
+  <button id="btnLogout" title="退出局域网登录" hidden>退出登录</button>
   <span id="status">连接中…</span>
   <span id="fps"></span>
 </div>
@@ -34,6 +35,15 @@
   <div id="overlay" hidden>
     <div id="overlayTitle">视频未就绪</div>
     <div id="overlayDetail"></div>
+  </div>
+  <div id="login" hidden>
+    <form id="loginForm">
+      <div id="loginTitle">Superuse 局域网访问</div>
+      <input id="loginKey" type="password" autocomplete="off" placeholder="访问密钥"
+             aria-label="访问密钥" autofocus>
+      <button type="submit" id="loginSubmit">登录</button>
+      <div id="loginError"></div>
+    </form>
   </div>
 </div>
 <script src="/app.js"></script>

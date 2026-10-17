@@ -18,7 +18,8 @@ from superuse.config import load_config  # noqa: E402
 
 @pytest.fixture
 async def broker(tmp_path: Path):
-    config = load_config()
+    # Explicit simulation: the default is real-hardware mode (task T1).
+    config = load_config(overrides={"device": {"mode": "simulated"}})
     instance = Broker(config, runtime_dir=tmp_path / "runtime", web_dir=default_web_dir())
     await instance.start()
     await instance.wait_healthy(timeout_s=10)

@@ -7,17 +7,17 @@ Superuse 适配 CDC `1209:0001` 与视频 `345F:2131`（`SK USB3 Video`）这一
 ## 功能与边界
 
 - 通知区域托盘、浏览器视频和键鼠操作、相对/绝对鼠标、组合键与全屏。
-- MCP stdio 截图、键盘、ASCII 文本及有界鼠标动作。
+- MCP stdio / Streamable HTTP 截图、键盘、ASCII 文本及有界鼠标动作；托盘可开启局域网访问。
 - 单一 broker 持有设备，按会话/租约仲裁，人工接管撤销旧输入。
-- 默认模拟模式；真实硬件必须显式启用且唯一匹配身份。
+- 默认真实设备模式；缺设备时常驻等待，唯一匹配身份后恢复。模拟仅用于显式开发与测试。
 
-项目处于开发阶段。真实视频、相对移动、右键、键盘与文档保存流程已经实测；拖动/滚轮、长稳、干净环境分发及更多浏览器兼容仍需验证。详见[验证状态](docs/development/validation.md)。音频、剪贴板、文件传输、任意 Unicode、OTA 和远程网络服务不在当前范围。
+项目处于开发阶段。真实视频、相对移动、右键、键盘与文档保存流程已经实测；拖动/滚轮、长稳、跨 PC、干净环境分发及更多浏览器兼容仍需验证。详见[验证状态](docs/development/validation.md)。音频、剪贴板、文件传输、任意 Unicode 和 OTA 不在当前范围。
 
 ## Portable 便携版
 
 将 Windows x64 portable ZIP 整体解压，双击 `Superuse.exe`。EXE 同目录下存在 `data/` 就自动使用便携模式，配置、日志、人工保留状态与运行文件均放在其中；不依赖启动工作目录，也不回退到 AppData。
 
-发布包自带空的 `data/`。首次启动生成 `data/config.toml`，默认模拟；停止应用后编辑配置以启用真实设备。正常退出后可移动整个目录；迁移后检查设备身份并更新 MCP EXE 路径。升级时保留自己的 `data/`。操作与构建见 [portable 说明](docs/portable.md)。
+发布包自带空的 `data/`。首次启动生成 `data/config.toml`，默认真实设备模式，缺设备时提示连接。正常退出后可移动整个目录；迁移后检查设备身份并更新 MCP EXE 路径。升级时保留自己的 `data/`。ZIP 根目录的 `MCP.md` 和两份 MCP 配置示例供 agent 直接读取，源文件见 [MCP 接入说明](packaging/MCP.md)。操作与构建见 [portable 说明](docs/portable.md)。
 
 ## 快速开始
 
@@ -28,7 +28,7 @@ uv sync --locked --extra app --dev
 uv run --locked superuse serve
 ```
 
-程序默认进入托盘并使用模拟设备。右键图标选择“打开界面”，或另开终端运行 `uv run --locked superuse open`。
+程序默认进入托盘并检测真实设备。右键图标选择“打开界面”，或另开终端运行 `uv run --locked superuse open`。源码开发需要模拟设备时显式传入 `serve --simulated`；发布 EXE 不提供模拟模式。
 
 连接真实设备前，让其他应用断开串口/视频，复制并编辑本机配置：
 
@@ -51,6 +51,8 @@ uv run --locked superuse mcp --client-label agent-a
 ```
 
 打包版使用 `SuperuseMCP.exe`。参考 [MCP 配置示例](examples/mcp-client.example.json)替换安装路径，不需填写令牌。各桥共享一个 broker；工具不会自动申请控制权。典型顺序为截图 → `acquire_control` → 有界输入 → 新截图确认 → `release_control`。
+
+HTTP MCP 使用 `http://127.0.0.1:18766/mcp` 和 `[network] key` 的 Bearer 请求头；远程访问需在托盘开启 LAN，并使用控制端实际局域网 IP。参考 [HTTP 配置示例](examples/mcp-client-http.example.json) 和 [MCP 完整接入说明](packaging/MCP.md)。
 
 相对位移为 HID 计数，绝对坐标须使用截图的 `basis_id`。`written` 仅表示报告已写出，不能代替目标 UI 确认。
 

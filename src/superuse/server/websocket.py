@@ -19,7 +19,7 @@ from aiohttp import WSMsgType, web
 from superuse.core.errors import ControlError, ErrorCode
 from superuse.core.models import HumanInputEnvelope, WireError
 from superuse.server.http import Api
-from superuse.server.sessions import BROWSER_COOKIE, parse_cookie
+from superuse.server.sessions import parse_cookie
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class WsServer:
         if not _origin_ok(request):
             raise ControlError(ErrorCode.FORBIDDEN, "Bad Origin")
         cookies = parse_cookie(request.headers.get("Cookie"))
-        self.sessions.browser_identity(cookies.get(BROWSER_COOKIE))
+        self.api.ws_browser_identity(cookies.get(self.api.browser_cookie))
         try:
             message = await asyncio.wait_for(ws.receive(), timeout=AUTH_WINDOW_S)
         except TimeoutError as exc:
@@ -140,6 +140,8 @@ class WsServer:
 
         queue = self.manager.subscribe()
         try:
+            if record is not None:
+                record.websockets.add(ws)
             # Full state immediately after authentication.
             latest = self.manager.get_state()
             await ws.send_json(
@@ -158,6 +160,7 @@ class WsServer:
         finally:
             self.manager.unsubscribe(queue)
             if record is not None:
+                record.websockets.discard(ws)
                 record.event_connections = max(0, record.event_connections - 1)
             else:
                 agent_record = self.sessions.agent_record(session.session_id)
@@ -181,7 +184,7 @@ class WsServer:
         ws = web.WebSocketResponse(heartbeat=10, max_msg_size=MAX_WS_MESSAGE)
         await ws.prepare(request)
         try:
-            await self._authenticate_human(request, ws)
+            _session, record = await self._authenticate_human(request, ws)
         except ControlError as exc:
             await ws.send_json({"error": exc.to_wire(), "request_id": "0" * 36})
             await ws.close(code=4001, message=b"authentication failed")
@@ -194,12 +197,14 @@ class WsServer:
             viewer.close()
             raise
         try:
+            record.websockets.add(ws)
             while True:
                 message = await ws.receive()
                 if message.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.ERROR):
                     break
                 # The video socket carries no client payloads.
         finally:
+            record.websockets.discard(ws)
             self._video_viewers.discard(viewer)
             viewer.close()
         return ws
@@ -270,6 +275,7 @@ class WsServer:
             else None
         )
         try:
+            record.websockets.add(ws)
             async for message in ws:
                 if message.type is WSMsgType.BINARY:
                     await ws.close(code=4000, message=b"binary not allowed on input")
@@ -295,6 +301,7 @@ class WsServer:
                     break
                 stream.handle(envelope)
         finally:
+            record.websockets.discard(ws)
             record.input_connection = False
             self.scheduler.detach_stream(session.session_id)
             # Only the lease owner's input-connection loss releases control.

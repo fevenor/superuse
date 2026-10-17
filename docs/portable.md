@@ -10,12 +10,15 @@ Superuse/
   SuperuseMCP.exe
   _internal/
   data/                   # 发布时为空；存在即启用 portable
-    config.toml           # 首次启动生成，默认 simulated
+    config.toml           # 首次启动生成，默认 real
     logs/
     state/control.json    # 人工保留状态
     runtime/broker.json   # 本次服务凭据，退出时清理
   config.example.toml
   PORTABLE.md
+  MCP.md                  # agent 可直接读取的配置、工具与故障处理说明
+  mcp-client.example.json
+  mcp-client-http.example.json
   LICENSE
   NOTICE.md
   THIRD-PARTY-NOTICES.md
@@ -27,9 +30,11 @@ Superuse/
 
 ## 使用、升级和迁移
 
-首次启动默认模拟，不打开真实硬件。初始配置完整写入后才发布为 `data/config.toml`，不会覆盖已有配置。正常退出，按同目录 `config.example.toml` 编辑该文件；`device.mode="real"` 启用真实模式，并检查选定的串口/视频身份。
+首次启动默认真实模式：程序常驻等待 SuperKVM 设备接入，不打开其他硬件。初始配置完整写入后才发布为 `data/config.toml`，不会覆盖已有配置。正常退出，按同目录 `config.example.toml` 编辑该文件；多组设备时在 `[device]` 中填入选定串口/视频稳定身份。从旧版本升级时，已有的 `device.mode="simulated"` 配置会在启动时自动迁移为 `real`（其余设置与人工保留状态原样保留），不存在任何让发布版运行模拟设备的入口。
 
 MCP 配置指向同目录 `SuperuseMCP.exe`，通常只需 `--client-label`。serve、open、status、diagnose 和 MCP 共享目录发现规则。显式 `--config` 优先于 portable 配置，`--runtime-dir` 覆盖运行目录；自定义 runtime 时日志/状态仍沿用原来的 runtime 父目录规则。
+
+ZIP 根目录附 [MCP 接入说明源文件](../packaging/MCP.md) 和 stdio/HTTP 两份配置示例，解压后 agent 直接读取 `MCP.md` 即可选择接入方式并按工具流程操作，无需源码仓库或 Python 环境。HTTP MCP 本机默认地址为 `http://127.0.0.1:18766/mcp`，远程使用需配置非空 `[network] key`，并由托盘开启局域网访问。
 
 迁移前从托盘正常退出，再移动整个目录。配置、日志和人工保留状态随目录移动；运行凭据与 instance 每次启动重新生成，session、lease、job 不恢复，也不重放动作。人工保留状态不会因移动而自动交还，仍需在界面主动交还。
 
@@ -47,6 +52,6 @@ uv run --locked --extra app --extra packaging pytest tests/integration/test_port
 
 产物为 `dist/Superuse-<版本>-windows-x64-portable.zip` 及 `.zip.sha256`。脚本在新的构建临时目录中运行 PyInstaller，只接收两个 EXE 和 `_internal`，不重新压缩用户安装目录。发布时会包含项目、直接复用上游、Python 和构建环境依赖的原始许可与清单。
 
-ZIP 迁移测试使用模拟设备，验证空 data 目录、异工作目录启动、MCP 自动发现、中文/空格路径迁移、配置保留、旧 runtime 替换及人工保留状态；还验证无界面模式遇到配置错误或无法创建 runtime 时返回非零退出码。`--headless` 失败不会弹出阻塞自动化的错误对话框。它不代替干净 Windows 或跨机器的真实设备兼容测试。
+ZIP 迁移测试以真实模式等待设备运行，验证空 data 目录、异工作目录启动、MCP 自动发现、中文/空格路径迁移、旧 simulated 配置迁移、配置保留、旧 runtime 替换及人工保留状态；还验证无界面模式遇到配置错误或无法创建 runtime 时返回非零退出码。`--headless` 失败不会弹出阻塞自动化的错误对话框。它不代替干净 Windows 或跨机器的真实设备兼容测试。
 
 `data/` 可能包含私人设备标识和运行凭据。发布新版始终运行构建脚本，不将使用过的目录直接压缩上传。

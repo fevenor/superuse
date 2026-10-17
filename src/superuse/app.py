@@ -36,6 +36,7 @@ from superuse.device.serial_actor import SerialActor
 from superuse.device.simulated import SimulatedCapture, SimulatedSerial
 from superuse.device.transport import RealSerialTransport
 from superuse.server.http import Api
+from superuse.server.network import LanIdentityRegistry, NetworkAuthority
 from superuse.server.sessions import Credentials, SessionRegistry
 from superuse.server.websocket import install_ws
 
@@ -92,6 +93,12 @@ class Broker:
         self.config = config
         self.runtime_dir = runtime_dir
         self.web_dir = web_dir
+        # Defense in depth behind the config-layer boundary: no code path in
+        # a frozen release build may ever construct simulated hardware.
+        from superuse.buildenv import simulated_devices_allowed
+
+        if config.simulated and not simulated_devices_allowed():
+            raise RuntimeError("simulated devices are not available in release builds")
         self.clock = MonotonicClock()
         self.credentials = credentials or Credentials()
         self.latch_store = FileLatchStore(runtime_dir.parent / "state" / "control.json")
@@ -99,6 +106,10 @@ class Broker:
 
         self.actor: SerialActor | None = None
         self.capture: SimulatedCapture | CaptureWorker | None = None
+        # True only when both devices opened during start(); a missing device
+        # keeps the broker (tray/UI/stdio) alive while the supervisor retries
+        # (task 2026-10-17 T2).
+        self.initial_device_ok = False
         self._capture_generation = 0
         self._video_status_generation = 0
         self._serial_transport = None
@@ -139,6 +150,10 @@ class Broker:
         self.sessions = SessionRegistry(
             credentials=self.credentials, instance_id=self.manager.instance_id
         )
+        # LAN access policy: shared key, entry tagging, network generation
+        # (task 2026-10-17 T3). Config changes need a restart by design.
+        self.network = NetworkAuthority(key=config.network["key"])
+        self.lan_identities = LanIdentityRegistry(self.network)
         self.api = Api(
             config=config,
             manager=self.manager,
@@ -146,11 +161,21 @@ class Broker:
             sessions=self.sessions,
             hub=self.hub,
             web_dir=web_dir,
+            network=self.network,
         )
         self.ws = None
         self.runner: web.AppRunner | None = None
         self.port = 0
         self._periodic: asyncio.Task | None = None
+        # Streamable HTTP MCP (task T4). Local mode binds 127.0.0.1:mcp_port
+        # when a key is configured; LAN mode rebinds via the tray (T6).
+        self.http_mcp = None
+        self.http_mcp_error: str | None = None
+        # LAN web entrance (task T6): present only while LAN is enabled.
+        self.lan_web = None
+        # Serializes enable/disable: rapid tray clicks and programmatic
+        # toggles share one transaction at a time.
+        self.lan_toggle_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Devices
@@ -229,6 +254,67 @@ class Broker:
             on_frame=publish,
         )
 
+    # ------------------------------------------------------------------
+    # Device attach (idempotent; used by start() and the supervisor)
+    # ------------------------------------------------------------------
+
+    def _open_serial(self) -> bool:
+        """Build, start and wire the serial actor; False when it cannot open.
+
+        Match failures (absent/ambiguous identity) land in DISCONNECTED with
+        a detail string; open failures (device busy) land in FAULT. Either
+        way the broker keeps serving status while the supervisor retries.
+        """
+        try:
+            transport, actor = self._build_serial()
+            try:
+                actor.start(query_device_info=True)
+            except Exception:
+                # No writer/reader threads exist yet; close the transport
+                # directly — actor.stop() would broadcast a "disconnected"
+                # that overwrites the FAULT recorded below.
+                with contextlib.suppress(Exception):
+                    transport.close()
+                raise
+        except ControlError as exc:
+            self._serial_transport = None
+            self.actor = None
+            self.manager.set_serial_status(DeviceStatus.DISCONNECTED)
+            self.manager.set_serial_detail(f"{exc.code.value}: {exc}")
+            return False
+        except Exception as exc:
+            self._serial_transport = None
+            self.actor = None
+            self.manager.set_serial_status(DeviceStatus.FAULT)
+            self.manager.set_serial_detail(f"open failed: {type(exc).__name__}")
+            return False
+        self._serial_transport = transport
+        self.actor = actor
+        self.manager._actor = actor  # swap the deferred placeholder
+        self.scheduler._actor = actor
+        self.manager.set_serial_detail(None)
+        return True
+
+    def _open_capture(self) -> bool:
+        """Build and start the capture source; False when it cannot open."""
+        try:
+            self.hub.begin_capture_generation()
+            capture = self._build_capture()
+            capture.start()
+        except ControlError as exc:
+            self.capture = None
+            self.manager.set_video_status(DeviceStatus.DISCONNECTED)
+            self.manager.set_video_detail(f"{exc.code.value}: {exc}")
+            return False
+        except Exception as exc:
+            self.capture = None
+            self.manager.set_video_status(DeviceStatus.FAULT)
+            self.manager.set_video_detail(f"open failed: {type(exc).__name__}")
+            return False
+        self.capture = capture
+        self.manager.set_video_detail(None)
+        return True
+
     def _on_serial_status(self, status: str) -> None:
         mapping = {
             "ready": DeviceStatus.READY,
@@ -266,17 +352,16 @@ class Broker:
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
-        transport, actor = self._build_serial()
-        self._serial_transport = transport
-        self.actor = actor
-        self.manager._actor = actor  # swap the deferred placeholder
-        self.scheduler._actor = actor
-        actor.start(query_device_info=True)
 
-        self.hub.begin_capture_generation()
-        capture = self._build_capture()
-        self.capture = capture
-        capture.start()
+        # Devices first (fast path keeps the neutralize-before-serve order),
+        # but a missing device is a state, not a startup failure: the tray,
+        # UI and stdio status must stay observable while the supervisor
+        # retries on its backoff ladder (task 2026-10-17 T2). Serial and
+        # video attach independently so "only serial" / "only video" are
+        # distinguishable states.
+        serial_ok = self._open_serial()
+        capture_ok = self._open_capture()
+        self.initial_device_ok = serial_ok and capture_ok
 
         app = self.api.build_app()
         self.ws = install_ws(self.api, app)
@@ -293,9 +378,205 @@ class Broker:
         self._periodic = asyncio.ensure_future(self._periodic_task())
         self._supervisor = DeviceSupervisor(self, tick_s=self._supervisor_tick_s)
         self._supervisor_task = asyncio.ensure_future(self._supervisor.run())
-        logger.info(
-            "broker listening on 127.0.0.1:%s (instance %s)", self.port, self.manager.instance_id
+        await self._start_local_http_mcp()
+        if self.initial_device_ok:
+            logger.info(
+                "broker listening on 127.0.0.1:%s (instance %s)",
+                self.port,
+                self.manager.instance_id,
+            )
+        else:
+            logger.info(
+                "broker listening on 127.0.0.1:%s (instance %s); waiting for the"
+                " SuperKVM device (serial=%s video=%s)",
+                self.port,
+                self.manager.instance_id,
+                "attached" if serial_ok else "missing",
+                "attached" if capture_ok else "missing",
+            )
+
+    def _state_provider(self):
+        """Read-only status for the superuse://state resource (in-process)."""
+        capabilities = [
+            "get_status",
+            "acquire_control",
+            "release_control",
+            "capture_screen",
+            "press_key",
+            "type_text",
+            "mouse_move",
+            "mouse_click",
+            "mouse_drag",
+            "mouse_scroll",
+            "mouse_move_relative",
+            "mouse_click_relative",
+            "mouse_drag_relative",
+            "mouse_scroll_relative",
+            "release_inputs",
+            "cancel_action",
+        ]
+        return {"state": self.manager.get_state().to_wire(), "capabilities": capabilities}
+
+    async def _start_local_http_mcp(self) -> None:
+        """Bind 127.0.0.1:mcp_port when a key is configured (best effort).
+
+        A port conflict or bind failure is recorded and surfaced via
+        /v1/network — it must not take the broker, tray or devices down.
+        """
+        from superuse.mcp.http_service import build_http_mcp_service
+
+        if not self.network.key_configured:
+            logger.info("HTTP MCP not enabled: no network key configured")
+            return
+        service = build_http_mcp_service(self, state_provider=self._state_provider)
+        try:
+            await service.start(host="127.0.0.1", port=self.config.network["mcp_port"])
+        except Exception as exc:  # noqa: BLE001
+            # Any failure here (bind, config, SDK) is a degraded network
+            # surface, never a reason to take the broker down (review R1).
+            self.http_mcp_error = str(exc)
+            self.network.last_bind_error = str(exc)
+            logger.warning("local HTTP MCP failed to start: %s", exc)
+            return
+        self.http_mcp = service
+        self.network.last_bind_error = None
+
+    def rescan_devices(self) -> None:
+        """User-triggered device re-detection (tray/menu; loop thread)."""
+        if self._supervisor is not None:
+            self._supervisor.rescan()
+
+    # ------------------------------------------------------------------
+    # LAN enable/disable transaction (task 2026-10-17 T6)
+    # ------------------------------------------------------------------
+
+    def lan_addresses(self) -> list[str]:
+        """Actual local IPv4 addresses for display (shared enumeration)."""
+        from superuse.server.network import local_ipv4_addresses
+
+        return local_ipv4_addresses()
+
+    def _new_lan_web(self):
+        from superuse.server.lan import LanApi, LanWebServer
+
+        api = LanApi(
+            self.api,
+            lan_identities=self.lan_identities,
+            authority=self.network,
+            web_port=self.config.network["web_port"],
         )
+        return LanWebServer(api)
+
+    async def enable_lan(self) -> dict:
+        """Turn LAN access on; serialized and transactional (see below)."""
+        async with self.lan_toggle_lock:
+            return await self._enable_lan_locked()
+
+    async def _enable_lan_locked(self) -> dict:
+        """Both entries must bind or nothing changes.
+
+        Order: bind the LAN web listener first (a failure leaves the current
+        state untouched), then rebind HTTP MCP to the LAN host. If the MCP
+        rebind fails, the LAN web listener is rolled back and the local MCP
+        binding is restored — never a half-open state or a fake success.
+        """
+        from superuse.mcp.http_service import build_http_mcp_service
+
+        if not self.network.key_configured:
+            return {"ok": False, "error": "key_missing"}
+        if self.lan_web is not None:
+            return {"ok": True, "addresses": self.lan_addresses()}
+
+        network = self.config.network
+        host, web_port, mcp_port = network["lan_host"], network["web_port"], network["mcp_port"]
+        web_server = self._new_lan_web()
+        try:
+            await web_server.start(host=host, port=web_port)
+        except OSError as exc:
+            self.network.last_bind_error = str(exc)
+            logger.warning("LAN web bind failed: %s", exc)
+            return {"ok": False, "error": "bind_error", "detail": str(exc)}
+
+        old_mcp, self.http_mcp = self.http_mcp, None
+        if old_mcp is not None:
+            with contextlib.suppress(Exception):
+                await old_mcp.stop()  # documented brief reconnect window
+        new_mcp = build_http_mcp_service(self, state_provider=self._state_provider)
+        try:
+            await new_mcp.start(host=host, port=mcp_port)
+        except Exception as exc:  # noqa: BLE001
+            detail = str(exc)
+            logger.warning("LAN MCP rebind failed, rolling back: %s", exc)
+            with contextlib.suppress(Exception):
+                await web_server.stop()
+            await self._restore_local_mcp()
+            self.network.last_bind_error = detail
+            return {"ok": False, "error": "bind_error", "detail": detail}
+        self.http_mcp = new_mcp
+        self.lan_web = web_server
+        self.network.last_bind_error = None
+        self.network.set_enabled(True)
+        self.network.addresses_provider = self.lan_addresses
+        addresses = self.lan_addresses() or ["127.0.0.1"]
+        logger.info("LAN access enabled on %s (web :%s, mcp :%s)", host, web_port, mcp_port)
+        return {"ok": True, "addresses": addresses}
+
+    async def _restore_local_mcp(self) -> None:
+        from superuse.mcp.http_service import build_http_mcp_service
+
+        local = build_http_mcp_service(self, state_provider=self._state_provider)
+        try:
+            await local.start(host="127.0.0.1", port=self.config.network["mcp_port"])
+            self.http_mcp = local
+            self.network.last_bind_error = None
+        except Exception as exc:  # noqa: BLE001
+            self.network.last_bind_error = str(exc)
+            logger.warning("local HTTP MCP restore failed: %s", exc)
+
+    async def disable_lan(self) -> dict:
+        """Turn LAN access off, serialized (docs §3.5 ordering below)."""
+        async with self.lan_toggle_lock:
+            return await self._disable_lan_locked()
+
+    async def _disable_lan_locked(self) -> dict:
+        """The network generation flips first so remote requests fail closed;
+        remote owners then release through the control manager's barrier;
+        only afterwards are the listeners and their sessions torn down. The
+        local MCP binding comes back so local agents only see the documented
+        reconnect window. Old cookies/page tokens/leases never resurrect.
+        """
+        if self.lan_web is None:
+            return {"ok": True}
+        # 1. Fail-closed window + identity invalidation.
+        self.network.set_enabled(False)
+        self.network.addresses_provider = None
+        # 2. Remote owners release through the normal barrier; only the LAN
+        # entrance's sessions are touched — local pages/agents keep theirs.
+        for session in self.sessions.close_entrance("lan"):
+            await self.manager.session_closed(session)
+        self.lan_identities.invalidate_all()
+        # 3. Revocation point for HTTP MCP agents BEFORE any listener waits
+        # (review 2026-10-17 R3): seal admission (new sessions 503, in-flight
+        # tools answer structured errors), then close every session's client
+        # — lease release through the control manager's barrier cancels
+        # running jobs while the internal API is still up. Sealing is on this
+        # LAN-bound service instance only; the local MCP is unaffected.
+        mcp, self.http_mcp = self.http_mcp, None
+        if mcp is not None:
+            mcp.seal()
+            with contextlib.suppress(Exception):
+                await mcp.drain()
+        # 4. Listeners down: remote web first, then the (LAN-bound) MCP.
+        web, self.lan_web = self.lan_web, None
+        with contextlib.suppress(Exception):
+            await web.stop()
+        if mcp is not None:
+            with contextlib.suppress(Exception):
+                await mcp.stop()
+        # 5. Local MCP back on its loopback binding.
+        await self._restore_local_mcp()
+        logger.info("LAN access disabled")
+        return {"ok": True}
 
     async def _periodic_task(self) -> None:
         try:
@@ -321,6 +602,17 @@ class Broker:
         if self._periodic is not None:
             self._periodic.cancel()
             self._periodic = None
+        # HTTP MCP sessions own broker leases: close their clients (via the
+        # service) while the loopback API is still up to serve the releases.
+        if self.http_mcp is not None:
+            service, self.http_mcp = self.http_mcp, None
+            with contextlib.suppress(Exception):
+                await service.stop()
+        if self.lan_web is not None:
+            web, self.lan_web = self.lan_web, None
+            self.network.set_enabled(False)
+            with contextlib.suppress(Exception):
+                await web.stop()
         # Documented order (windows-operations §1): mark stopping, refuse new
         # input, stop jobs/leases and run the bounded release barrier FIRST —
         # runner.cleanup() waits for live requests/WS, so it must come after
@@ -433,12 +725,11 @@ class DeviceSupervisor:
     """Recovery/reconnection loop (review R09, docs/development/device-video.md §5).
 
     Responsibilities:
+    - attach devices that were missing at startup (first plug-in) and reopen
+      them after a fault/disconnect — the same backoff ladder and identity
+      rules cover both, so a different device is never silently adopted;
     - drive ``manager.recover()`` once serial+video are healthy again and a
       fresh frame exists (latch/fence ordering stays inside the manager);
-    - re-open the serial device with the *same configured identity* after a
-      fault/disconnect, using the 1/2/4/8/10s backoff ladder; the identity
-      match runs again on every attempt, so a different device is never
-      silently adopted;
     - restart a faulted capture source when its old handle closed cleanly
       (a hung close keeps the thread slot occupied and is never replaced).
 
@@ -456,6 +747,29 @@ class DeviceSupervisor:
         self._capture_reconnect_pending = False
         self._capture_retry_at = 0.0
         self._reconnecting = False
+        self._wake = asyncio.Event()
+
+    def rescan(self) -> None:
+        """User-triggered re-detection: zero the ladders and wake the loop.
+
+        Only meaningful on the broker loop (the tray dispatches there); a
+        rescan never interrupts an in-flight open, it only makes the next
+        attempt immediate.
+        """
+        self._serial_attempts = 0
+        self._capture_attempts = 0
+        self._capture_retry_at = 0.0
+        self._wake.set()
+
+    async def _sleep(self, seconds: float) -> None:
+        """Backoff sleep that a rescan latch can shorten to zero.
+
+        The wake event is consumed HERE, not by the tick loop: a rescan that
+        fires between cycles must still shorten the next backoff.
+        """
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._wake.wait(), timeout=seconds)
+        self._wake.clear()
 
     async def run(self) -> None:
         try:
@@ -492,33 +806,44 @@ class DeviceSupervisor:
             pass  # not healthy enough yet; keep waiting
 
     async def _maybe_reconnect_serial(self) -> None:
+        """Attach the serial device: first plug-in and reconnects share this."""
         broker = self._broker
         if self._reconnecting:
             return
         actor = broker.actor
-        if actor is None or actor.status not in ("fault", "disconnected"):
+        first_attach = actor is None
+        if not first_attach and actor.status not in ("fault", "disconnected"):
             return
         self._reconnecting = True
         try:
             backoff = self.BACKOFF_S[min(self._serial_attempts, len(self.BACKOFF_S) - 1)]
-            await asyncio.sleep(backoff)
-            if broker.manager.mode.value == "stopping" or broker.actor is not actor:
+            await self._sleep(backoff)
+            if broker.manager.mode.value == "stopping":
                 return
-            # Identity is re-verified by _build_serial via discovery; a changed
-            # or missing device raises instead of adopting a substitute.
+            current = broker.actor
+            if current is not actor:  # someone else attached/replaced meanwhile
+                return
+            if first_attach:
+                if broker._open_serial():
+                    attempts = self._serial_attempts + 1
+                    self._serial_attempts = 0
+                    logger.info("serial device attached (attempt %d)", attempts)
+                else:
+                    self._serial_attempts += 1
+                return
+            # Identity is re-verified by _open_serial via discovery; a changed
+            # or missing device raises instead of adopting a substitute. The
+            # old actor must stop FIRST: its terminal "disconnected" callback
+            # must never land after the replacement's "ready".
             old = broker.actor
-            transport, replacement = broker._build_serial()
             old.stop()
-            broker._serial_transport = transport
-            broker.actor = replacement
-            broker.manager._actor = replacement
-            broker.scheduler._actor = replacement
-            replacement.start(query_device_info=True)
-            self._serial_attempts += 1
-            logger.info("serial reconnect attempt %d (identity re-matched)", self._serial_attempts)
-        except ControlError as exc:
-            self._serial_attempts += 1
-            logger.warning("serial reconnect deferred: %s", exc)
+            if broker._open_serial():
+                self._serial_attempts += 1
+                logger.info(
+                    "serial reconnect attempt %d (identity re-matched)", self._serial_attempts
+                )
+            else:
+                self._serial_attempts += 1
         except Exception:
             self._serial_attempts += 1
             logger.exception("serial reconnect failed")
@@ -527,6 +852,20 @@ class DeviceSupervisor:
 
     async def _maybe_restart_capture(self) -> None:
         broker = self._broker
+        if broker.capture is None:
+            # First attach: same bounded ladder as the serial side.
+            if broker.clock.now < self._capture_retry_at:
+                return
+            if broker._open_capture():
+                self._capture_attempts = 0
+                logger.info("capture source attached")
+            else:
+                self._capture_attempts += 1
+                self._capture_retry_at = (
+                    broker.clock.now
+                    + self.BACKOFF_S[min(self._capture_attempts, len(self.BACKOFF_S) - 1)]
+                )
+            return
         capture = broker.capture
         status = getattr(capture, "status", None)
         fault_reason = getattr(capture, "fault_reason", None) or getattr(capture, "fault", None)

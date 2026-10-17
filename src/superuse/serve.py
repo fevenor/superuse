@@ -17,7 +17,8 @@ import threading
 from pathlib import Path
 
 from superuse.app import Broker, default_web_dir
-from superuse.config import ConfigError, load_config
+from superuse.buildenv import is_frozen_build
+from superuse.config import ConfigError, load_config, migrate_legacy_simulated_config
 from superuse.core.models import Session, SessionKind
 from superuse.paths import resolve_paths
 from superuse.windows import instance, security
@@ -62,8 +63,16 @@ def default_runtime_dir() -> Path:
     return resolve_paths().runtime_dir
 
 
-def _load(path: str | Path | None, real: bool):
-    overrides = {"device": {"mode": "real"}} if real else None
+def _load(path: str | Path | None, *, want_simulated: bool = False, force_real: bool = False):
+    overrides = None
+    if want_simulated:
+        from superuse.buildenv import simulated_devices_allowed
+
+        if not simulated_devices_allowed():
+            raise SystemExit("simulated devices are not available in release builds")
+        overrides = {"device": {"mode": "simulated"}}
+    elif force_real:
+        overrides = {"device": {"mode": "real"}}
     try:
         return load_config(user_file=Path(path) if path else None, overrides=overrides)
     except (ConfigError, OSError, ValueError) as exc:
@@ -79,7 +88,14 @@ class ServeApp:
         # A missing implicit portable config is initialized after the mutex;
         # a missing explicitly selected config remains a configuration error.
         pending = self.paths.portable and not args.config and config and not config.exists()
-        self.config = _load(None if pending else config, args.real)
+        self._want_simulated = bool(getattr(args, "simulated", False))
+        if is_frozen_build():
+            # Release builds load exactly once, after the legacy simulated ->
+            # real migration ran (run()); an early load would reject the very
+            # config that migration is supposed to repair.
+            self.config = None  # type: ignore[assignment]
+        else:
+            self.config = _load(None if pending else config, want_simulated=self._want_simulated)
         self.mutex = instance.BrokerMutex()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.broker: Broker | None = None
@@ -88,6 +104,9 @@ class ServeApp:
         self._stopped = threading.Event()
         self._tray_session: Session | None = None
         self._tray_app: TrayApp | None = None
+        self._migration_notice: str | None = None
+        self._migration_failed = False
+        self._migration_error: str | None = None
 
     # ------------------------------------------------------------------
     # Entry
@@ -99,8 +118,22 @@ class ServeApp:
         try:
             try:
                 self.paths.initialize()
-                self.config = _load(self.paths.config_file, self.args.real)
+                self._migrate_legacy_config()
+                self.config = _load(
+                    self.paths.config_file,
+                    want_simulated=self._want_simulated,
+                    force_real=self._migration_failed,
+                )
                 setup_logging(self.config, runtime_dir=self.runtime_dir, console=self.args.headless)
+                if self._migration_notice:
+                    logger.warning("config migration: %s", self._migration_notice)
+                if self._migration_failed:
+                    logger.error(
+                        "config migration to real device mode failed (%s); the file still"
+                        " says simulated and was NOT saved — running with real devices"
+                        " for this session only",
+                        self._migration_error,
+                    )
             except OSError as exc:
                 raise SystemExit(f"Cannot write application data: {exc}") from exc
             self._start_broker_thread()
@@ -111,6 +144,24 @@ class ServeApp:
             return 0
         finally:
             self._shutdown()
+
+    def _migrate_legacy_config(self) -> None:
+        """One-time simulated→real rewrite, release builds only (task T1).
+
+        Development checkouts never rewrite a config the developer explicitly
+        set to simulated. A failed write is reported after logging is up and
+        the session continues in real mode; it never falls back to simulation.
+        """
+        if not is_frozen_build() or self._want_simulated:
+            return
+        config_file = self.paths.config_file
+        if config_file is None or not config_file.exists():
+            return
+        try:
+            self._migration_notice = migrate_legacy_simulated_config(config_file)
+        except OSError as exc:
+            self._migration_failed = True
+            self._migration_error = str(exc)
 
     @staticmethod
     def _no_tray_available() -> bool:
@@ -164,10 +215,15 @@ class ServeApp:
                     web_dir=default_web_dir(),
                 )
                 await self.broker.start()
-                try:
-                    await self.broker.wait_healthy(timeout_s=15)
-                except Exception:
-                    logger.warning("device not healthy yet; staying in recovery")
+                if self.broker.initial_device_ok:
+                    try:
+                        await self.broker.wait_healthy(timeout_s=15)
+                    except Exception:
+                        logger.warning("device not healthy yet; staying in recovery")
+                else:
+                    # Tray/UI/stdio are already serving; the supervisor keeps
+                    # retrying the device on its backoff ladder (task T2).
+                    logger.info("device not attached; waiting for the SuperKVM device")
                 security.apply_user_only_acl(instance.runtime_path(self.runtime_dir))
             except Exception as exc:
                 self._startup_error = exc
@@ -253,6 +309,35 @@ class ServeApp:
     def copy_diagnostics(self) -> str:
         return diagnostics_text(self.config, self.broker)
 
+    async def rescan_devices(self) -> None:
+        if self.broker is not None:
+            self.broker.rescan_devices()
+
+    async def set_lan(self, enabled: bool) -> None:
+        """Tray LAN toggle; the broker serializes the transaction itself."""
+        broker = self.broker
+        if broker is None:
+            return
+        result = await (broker.enable_lan() if enabled else broker.disable_lan())
+        if not result.get("ok"):
+            logger.warning("LAN %s failed: %s", "enable" if enabled else "disable", result)
+
+    def lan_enabled(self) -> bool:
+        return self.broker is not None and self.broker.network.enabled
+
+    def lan_toggle_available(self) -> bool:
+        return self.broker is not None and self.broker.network.key_configured
+
+    def lan_address_text(self) -> str:
+        broker = self.broker
+        if broker is None or broker.lan_web is None:
+            return "局域网访问未开启"
+        network = self.config.network
+        addresses = broker.lan_addresses() or ["127.0.0.1"]
+        lines = [f"浏览器: http://{address}:{network['web_port']}" for address in addresses]
+        lines.extend(f"MCP: http://{address}:{network['mcp_port']}/mcp" for address in addresses)
+        return "\n".join(lines)
+
     def quit(self) -> None:
         self._stopped.set()
         # The tray loop owns the main thread; stopping the broker alone would
@@ -264,7 +349,20 @@ class ServeApp:
         if self.broker is None:
             return "启动中"
         state = self.broker.manager.get_state()
-        return state_label(state.mode, state.source == "simulated")
+        label = state_label(state.mode, state.source == "simulated")
+        network = self.broker.network
+        if network.last_bind_error:
+            lan = "局域网端口错误"
+        elif not network.key_configured:
+            lan = "局域网未配置密钥"
+        elif network.enabled:
+            lan = "局域网已开启"
+        else:
+            lan = "局域网已关闭"
+        label = f"{label}；{lan}"
+        if self._migration_notice or self._migration_failed:
+            return f"已升级为真实设备模式，请连接设备；{label}"
+        return label
 
     def _run_tray_blocking(self) -> None:
         web_dir = default_web_dir() or Path()
@@ -279,6 +377,11 @@ class ServeApp:
             on_quit=self.quit,
             get_state_summary=self.state_summary,
             icon_path=str(icon_path) if icon_path.exists() else None,
+            on_rescan_devices=self.rescan_devices,
+            on_set_lan=self.set_lan,
+            lan_enabled=self.lan_enabled,
+            lan_toggle_available=self.lan_toggle_available,
+            lan_address_text=self.lan_address_text,
         )
         self._tray_app = app
         app.run()
@@ -404,7 +507,7 @@ def run_diagnose(args) -> int:
     paths = resolve_paths(config_file=args.config)
     config_file = paths.config_file
     pending = paths.portable and not args.config and config_file and not config_file.exists()
-    config = _load(None if pending else config_file, real=False)
+    config = _load(None if pending else config_file)
     text = diagnostics_text(config, None)
     if args.output:
         out_dir = Path(args.output)
@@ -417,9 +520,19 @@ def run_diagnose(args) -> int:
 
 
 def build_argparsers(sub) -> None:
-    serve = sub.add_parser("serve", help="tray + broker; default simulated, --real for hardware")
+    serve = sub.add_parser(
+        "serve",
+        help="tray + broker; waits for the real device by default (simulated is dev-only)",
+    )
     serve.add_argument("--config", default=None)
-    serve.add_argument("--real", action="store_true")
+    serve.add_argument(
+        "--real", action="store_true", help="compatibility no-op: real devices are the default"
+    )
+    serve.add_argument(
+        "--simulated",
+        action="store_true",
+        help="development only: run simulated devices (rejected by release builds)",
+    )
     serve.add_argument("--headless", action="store_true", help="no tray; run until Ctrl+C (CI)")
     serve.add_argument("--runtime-dir", default=None)
     serve.set_defaults(which="serve")

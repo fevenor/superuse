@@ -43,12 +43,28 @@ class PageRecord:
     expires_at: float
     event_connections: int = 0
     input_connection: bool = False
+    # Entrance/origin tagging (task 2026-10-17 T3): "local" pages come from
+    # the loopback UI bootstrap; "lan" pages were minted from a LAN identity
+    # and die with their network generation.
+    entrance: str = "local"
+    network_generation: int | None = None
+    # LAN pages remember which browser identity minted them so a logout can
+    # revoke exactly that browser's sessions (review 2026-10-17 R4).
+    owner_identity: str | None = None
+    # Live human sockets for this page (events/video/input), so a logout or
+    # shutdown can close them instead of waiting for client-side teardown.
+    websockets: set = field(default_factory=set)
 
 
 @dataclass
 class BrowserIdentity:
     cookie_value: str
     csrf: str
+
+
+# LAN page records have no loopback BrowserIdentity; the record's own csrf and
+# the network generation carry their validity (task 2026-10-17 T3).
+_LAN_PLACEHOLDER = BrowserIdentity(cookie_value="", csrf="")
 
 
 @dataclass
@@ -125,10 +141,24 @@ class SessionRegistry:
         return identity
 
     def create_page_session(
-        self, *, identity: BrowserIdentity, csrf: str, label: str, now: float
+        self,
+        *,
+        identity: BrowserIdentity | None = None,
+        csrf: str,
+        label: str,
+        now: float,
+        entrance: str = "local",
+        network_generation: int | None = None,
+        owner_identity: str | None = None,
     ) -> tuple[Session, PageRecord]:
-        if not secrets.compare_digest(csrf, identity.csrf):
-            raise ControlError(ErrorCode.FORBIDDEN, "CSRF mismatch")
+        if entrance == "local":
+            if identity is None:
+                raise ControlError(ErrorCode.AUTH_FAILED, "No browser identity")
+            if not secrets.compare_digest(csrf, identity.csrf):
+                raise ControlError(ErrorCode.FORBIDDEN, "CSRF mismatch")
+            browser = identity
+        else:
+            browser = _LAN_PLACEHOLDER
         session = Session(
             session_id=str(uuid.uuid4()), kind=SessionKind.HUMAN, label=(label or "page")[:80]
         )
@@ -136,9 +166,12 @@ class SessionRegistry:
         record = PageRecord(
             session=session,
             page_token=page_token,
-            csrf=identity.csrf,
-            browser=identity,
+            csrf=csrf,
+            browser=browser,
             expires_at=now + SESSION_TTL_S,
+            entrance=entrance,
+            network_generation=network_generation,
+            owner_identity=owner_identity,
         )
         self._pages_by_token[page_token] = record
         return session, record
@@ -159,6 +192,24 @@ class SessionRegistry:
 
     def page_record_by_token(self, page_token: str) -> PageRecord | None:
         return self._pages_by_token.get(page_token)
+
+    def lan_page_records(self, *, network_generation: int | None = None) -> list[PageRecord]:
+        """LAN-minted pages, optionally only those of one network generation."""
+        return [
+            record
+            for record in self._pages_by_token.values()
+            if record.entrance == "lan"
+            and (network_generation is None or record.network_generation == network_generation)
+        ]
+
+    def close_entrance(self, entrance: str) -> list[Session]:
+        """Drop every session of one entrance; returns them for owner cleanup."""
+        closed: list[Session] = []
+        for token, record in list(self._pages_by_token.items()):
+            if record.entrance == entrance:
+                closed.append(record.session)
+                del self._pages_by_token[token]
+        return closed
 
     def close_session(self, session_id: str) -> None:
         for token, record in list(self._agents_by_token.items()):

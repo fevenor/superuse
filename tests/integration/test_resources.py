@@ -19,7 +19,9 @@ async def test_persisted_human_hold_is_a_healthy_startup(tmp_path):
     state = tmp_path / "state"
     state.mkdir()
     (state / "control.json").write_text('{"human_latched":true}', encoding="utf-8")
-    broker = app.Broker(load_config(), runtime_dir=tmp_path / "runtime")
+    broker = app.Broker(
+        load_config(overrides={"device": {"mode": "simulated"}}), runtime_dir=tmp_path / "runtime"
+    )
     try:
         await broker.start()
         await broker.wait_healthy(timeout_s=2)

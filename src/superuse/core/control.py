@@ -32,6 +32,20 @@ from superuse.core.ports import FenceResult, FenceTicket, LatchStore
 logger = logging.getLogger(__name__)
 
 EVENT_QUEUE_LIMIT = 16
+DETAIL_MAX_CHARS = 120
+
+
+def _bound_detail(detail: str | None) -> str | None:
+    """Bound and de-sensitize device detail strings before they hit state.
+
+    Enumeration errors quote identities (``sn=...``, device paths); those do
+    not belong in status wires or logs, so only the leading token survives.
+    """
+    if detail is None:
+        return None
+    first = detail.split(" (")[0].split(" sn=")[0].split(" at path")[0]
+    first = " ".join(first.split())
+    return first[:DETAIL_MAX_CHARS] or None
 
 
 @dataclass
@@ -85,6 +99,8 @@ class ControlManager:
         self._lease: LeaseRecord | None = None
         self._serial_status = DeviceStatus.DISCONNECTED
         self._video_status = DeviceStatus.DISCONNECTED
+        self._serial_detail: str | None = None
+        self._video_detail: str | None = None
         self._last_frame: float | None = None
         self._pending_ticket: FenceTicket | None = None
         self._pending_future: asyncio.Future[FenceResult] | None = None
@@ -136,6 +152,8 @@ class ControlManager:
             serial_status=self._serial_status,
             video_status=self._video_status,
             frame_age_ms=frame_age_ms,
+            serial_detail=self._serial_detail,
+            video_detail=self._video_detail,
         )
 
     def subscribe(self) -> asyncio.Queue[StateEvent]:
@@ -187,10 +205,23 @@ class ControlManager:
         if status in (DeviceStatus.FAULT, DeviceStatus.DISCONNECTED):
             self._enter_recovery(f"serial_{status.value}")
 
+    def set_serial_detail(self, detail: str | None) -> None:
+        """Why the serial device is not ready; None clears it (task T2)."""
+        self._serial_detail = _bound_detail(detail)
+        self._publish_if_detail_changed("serial_detail")
+
     def set_video_status(self, status: DeviceStatus) -> None:
         self._video_status = status
         if status is DeviceStatus.FAULT:
             self._enter_recovery("video_fault")
+
+    def set_video_detail(self, detail: str | None) -> None:
+        self._video_detail = _bound_detail(detail)
+        self._publish_if_detail_changed("video_detail")
+
+    def _publish_if_detail_changed(self, reason: str) -> None:
+        """Detail changes are state revisions so subscribers re-render hints."""
+        self._publish(reason)
 
     def frame_received(self) -> None:
         self._last_frame = self._clock.now

@@ -43,7 +43,7 @@
 
 | ID | 用例 | 必须证明 |
 |---|---|---|
-| I01 | 全模拟模式启动、输入、看图、接管 | 不打开真实句柄；UI/截图元数据标明 simulated |
+| I01 | 显式模拟 fixture 启动、输入、看图、接管 | 不打开真实句柄；UI/截图元数据标明 simulated（默认配置为真实模式，测试必须显式注入模拟） |
 | I02 | agent 尝试声明 human/调用 takeover、恶意 Origin、缺 CSRF | 全部拒绝；无写报告 |
 | I03 | 官方 SDK client 启动 stdio bridge 并调用所有工具 | 工具 schema 与返回类型正确，stdout 只有 MCP |
 | I04 | 两个独立 MCP stdio 桥共用 broker | 一个串口/相机，会话隔离与错误码正确 |
@@ -52,6 +52,10 @@
 | I07 | API 未知字段、超长消息、非法帧头 | 有界拒绝，不分配无界内存/挂死服务 |
 | I08 | 通知不支持的 MCP host | 每次输入仍能观察失权，不依赖后台唤醒 |
 | I09 | 同浏览器两标签页、旧页关闭/刷新 | page session 独立；旧页失焦/断开不影响新页 owner |
+| I10 | 无设备常驻启动、后接入、重连、重新检测 | 服务先就绪；状态可区分（未连接/仅串口/仅视频/多匹配/占用）；恢复不重放 |
+| I11 | 官方 SDK client 走 Streamable HTTP（key 准入、双客户端争用、取消、资源） | 每传输会话独立 BrokerClient；错误 key 401；租约/续租随会话终止回收 |
+| I12 | LAN 登录链（key→cookie→page→WS）、管理面缺失、Origin/Host | 未登录全拒；本机入口不受影响；CSRF/generation 生效 |
+| I13 | LAN 开关事务与关闭清理 | 两入口同开同关；端口冲突回滚不假成功；旧 cookie/token/租约不复活；本机 stdio 不受影响 |
 
 先用官方 SDK client 完成协议验收，再按用户实际使用的两个 agent 客户端做兼容验证。未实际运行某客户端时不能写入支持列表。
 
@@ -98,7 +102,7 @@ CPU/RSS/包体/启动时间先记录基线，不捏造绝对预算。对比无�
 
 ## 7. Windows 包验收
 
-Portable：先运行 `scripts/build_portable.py`，再运行 `tests/integration/test_portable_package.py`。该用例解压真实 ZIP、从其他 cwd 启动托盘/MCP、迁移到中文和空格路径，并核对凭据轮换、人工保留与不写入个人 AppData；只使用模拟设备。
+Portable：先运行 `scripts/build_portable.py`，再运行 `tests/integration/test_portable_package.py`。该用例解压真实 ZIP、从其他 cwd 启动托盘/MCP、迁移到中文和空格路径，并核对凭据轮换、旧 simulated 配置迁移、人工保留与不写入个人 AppData；发布 EXE 以真实模式等待设备（不通过模拟绕过），设备输入闭环在显式开发模拟 fixture 中验证。CI 可 mock 发现与 transport，但不能让发布 EXE 接受模拟开关。
 
 W01：通知区域无控制台，打开/全屏/接管入口可用。W02：重复启动与退出后句柄释放，路径含中文/空格，非管理员运行。W03：干净环境无预装 Python 可运行、页面无需外网、两种 EXE 的 stdio 行为正确。W04：只读诊断脱敏、日志轮转、许可清单完整、版本和锁文件可追溯。
 

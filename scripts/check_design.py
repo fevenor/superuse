@@ -49,9 +49,12 @@ def check_contracts() -> int:
     validators["Config"].validate(config)
     control, video = config["control"], config["video"]
     if control["renew_interval_ms"] * 2 > control["lease_ttl_ms"]:
-        raise ValueError("Renew interval must be at most half the configured lease TTL")
+        raise ValueError("Renew interval must be at most half of the configured lease TTL")
     if video["freshness_ms"] >= video["stall_timeout_ms"]:
         raise ValueError("Freshness threshold must precede stall timeout")
+    network = config["network"]
+    if network["web_port"] == network["mcp_port"]:
+        raise ValueError("network.web_port and network.mcp_port must differ")
     return len(manifest)
 
 

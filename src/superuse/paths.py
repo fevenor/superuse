@@ -12,12 +12,13 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-PORTABLE_CONFIG = """# Superuse portable configuration. Real hardware is opt-in.
+PORTABLE_CONFIG = """# Superuse portable configuration. The app waits for the real SuperKVM
+# device; simulation exists only in development source runs.
 # See config.example.toml for all supported fields.
 schema_version = 1
 
 [device]
-mode = "simulated"
+mode = "real"
 """
 
 

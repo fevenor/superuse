@@ -226,7 +226,11 @@ async def test_r07_tray_actions_do_not_block_the_loop(broker, base_url, monkeypa
     from superuse.windows.tray import TrayApp
 
     args = argparse.Namespace(
-        config=None, real=False, headless=True, runtime_dir=str(broker.runtime_dir)
+        config=None,
+        real=False,
+        simulated=False,
+        headless=True,
+        runtime_dir=str(broker.runtime_dir),
     )
     app = ServeApp(args)
     app.broker = broker
@@ -317,7 +321,7 @@ async def test_r09_supervisor_recovers_and_reconnects(tmp_path):
     from superuse.config import load_config
 
     broker = Broker(
-        load_config(),
+        load_config(overrides={"device": {"mode": "simulated"}}),
         runtime_dir=tmp_path / "runtime",
         web_dir=None,
         supervisor_tick_s=0.1,

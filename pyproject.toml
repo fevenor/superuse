@@ -17,6 +17,9 @@ dependencies = []
 app = [
     "aiohttp>=3.14.5,<4",
     "mcp>=2.3,<3",
+    # Serves the SDK's ASGI streamable-HTTP app on the broker loop (task
+    # 2026-10-17); already locked as an mcp transitive, now imported directly.
+    "uvicorn>=0.34,<1",
     "pyserial==3.5",
     "opencv-python-headless==5.0.0.93",
     "cv2-enumerate-cameras==1.4.0",

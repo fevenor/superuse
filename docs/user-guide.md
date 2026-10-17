@@ -6,7 +6,7 @@
 
 被控端通过 HDMI 输出视频，并通过 USB 接收键鼠；无需安装 Superuse。目标输入布局、输入法、固件和绝对鼠标兼容性会影响行为。ASCII 文本输入应使用 US 键盘布局及英文输入状态。
 
-## 先以模拟模式运行
+## 启动与等待设备
 
 在仓库根目录的 PowerShell 中运行：
 
@@ -15,7 +15,9 @@ uv sync --locked --extra app --dev
 uv run --locked superuse serve
 ```
 
-程序进入通知区域，右键图标选择“打开界面”。也可另开终端执行 `uv run --locked superuse open`。模拟模式不会打开真实串口或视频设备，页面会标明模拟来源。
+程序进入通知区域，右键图标选择“打开界面”。也可另开终端执行 `uv run --locked superuse open`。
+
+真实设备是默认模式：设备未接入时程序照常运行，托盘与页面显示“请连接 SuperKVM 设备”（及可区分的原因：未连接/仅串口/仅视频/多设备匹配/被占用），接入后自动恢复。可用托盘“重新检测设备”立即重试。开发调试可用 `--simulated` 显式选择模拟设备（发布 EXE 拒绝该参数；模拟仅存在于源码运行，页面会标明模拟来源）。
 
 `--headless` 适合调试和测试，不显示托盘；普通使用保持托盘入口即可。`status` 输出脱敏的服务发现信息，`diagnose` 只读枚举设备，不打开摄像头。
 
@@ -28,15 +30,15 @@ Copy-Item config.example.toml superuse.local.toml
 uv run --locked superuse diagnose
 ```
 
-示例配置默认模拟，真实模式需显式开启。若只有一组匹配设备，空的 `serial_number`、`device_path` 可用于唯一匹配；存在多组设备时应填入本机稳定身份。完整视频路径可通过 `superuse.device.discovery.list_video_devices()` 只读枚举，不能将诊断中的名称顺序当作采集索引。设备标识只保存在本机配置中。
+示例配置默认等待真实设备。若只有一组匹配设备，空的 `serial_number`、`device_path` 可用于唯一匹配；存在多组设备时应填入本机稳定身份。完整视频路径可通过 `superuse.device.discovery.list_video_devices()` 只读枚举，不能将诊断中的名称顺序当作采集索引。设备标识只保存在本机配置中。
 
 ```powershell
-uv run --locked superuse serve --real --config superuse.local.toml
+uv run --locked superuse serve --config superuse.local.toml
 ```
 
-配置文件需要通过 `--config` 显式指定；源码入口不会自动读取任意当前目录配置。启动时会中和输入，随后开放观看和控制。找不到设备、多设备匹配或设备被占用会报错，不会改开其他串口/内置摄像头或回退模拟模式。
+配置文件需要通过 `--config` 显式指定；源码入口不会自动读取任意当前目录配置。启动时会中和输入，随后开放观看和控制。找不到设备或多设备匹配时保持等待并在状态中说明原因，不会改开其他串口/内置摄像头，也绝不会回退为模拟模式。
 
-便携版存在同目录 `data/` 时自动读取 `data/config.toml`，无需指定 `--config`；其默认配置仍为模拟。详见 [Portable 模式](portable.md)。
+便携版存在同目录 `data/` 时自动读取 `data/config.toml`，无需指定 `--config`；其默认配置同为真实模式。详见 [Portable 模式](portable.md)。
 
 ## 浏览器操作
 
@@ -52,6 +54,8 @@ uv run --locked superuse serve --real --config superuse.local.toml
 
 窗口真正失焦、隐藏或输入连接中断时，会释放输入并进入“人工暂停”。此时仍阻止 agent，需要人工重新“接管”或点击“交还”。只有显式交还才解除人工保留，不会因 agent 下一次请求而自动交还。
 
+“人工控制已暂停”表示可用输入租约已撤销、已尽力释放按键，但人工优先标志仍保留。页面会显示失焦、租约过期或输入积压等原因。快速鼠标移动采用采样、合并和终态回执流控：最多 4 条报告等待写完，连续待发移动最多再保留两条报告的位移，过载时压缩位移并淘汰过期移动，不会因为持续快速移动而不断积压并暂停。严重过载下实际移动距离可能缩短；按钮、滚轮和键盘事件保持顺序。真实断连、设备故障、失焦或状态事件异常溢出仍会暂停，重新接管不会重放旧输入。
+
 工具栏可发送 Ctrl+Alt+Del、Alt+Tab，切换显示比例与全屏。浏览器可能截获本机系统快捷键，使用工具栏发送这些组合键更直接。
 
 ## MCP 接入
@@ -65,6 +69,23 @@ uv run --locked superuse mcp --client-label agent-a
 打包版使用 `SuperuseMCP.exe`。可复制 [MCP 配置示例](../examples/mcp-client.example.json)，替换为实际安装路径；配置内不填写令牌。使用自定义 runtime 目录时，serve 与 MCP 的 `--runtime-dir` 必须一致。
 
 agent 的典型调用顺序：`get_status` → `capture_screen` → `acquire_control` → 有界输入 → 新截图确认 → `release_control`。输入工具不会自动申请控制权。
+
+### 局域网访问与 HTTP MCP
+
+在 `config.toml`（或便携版 `data/config.toml`）中配置：
+
+```toml
+[network]
+key = "你的密钥"        # 任意非空字符串；"a"、"123" 均可，精确比较
+web_port = 18765        # 远程浏览器
+mcp_port = 18766        # Streamable HTTP MCP（路径 /mcp）
+lan_host = "0.0.0.0"    # 或填单一本机 IPv4 只监听一块网卡
+```
+
+重启程序后，托盘勾选“允许局域网访问”开启（每次启动默认关闭；开关不修改配置文件）。开启成功后托盘“复制局域网地址”给出实际地址。远程浏览器打开 `http://<控制端IP>:18765`，输入密钥登录后与本地页面操作一致；远程 agent 按 [HTTP MCP 配置示例](../examples/mcp-client-http.example.json) 连接 `http://<控制端IP>:18766/mcp` 并携带 `Authorization: Bearer <密钥>`。同一个密钥同时用于两者；每个 agent 连接是独立控制会话，多个 agent 之间仍按租约规则竞争。stdio 桥无需密钥。
+
+关闭局域网访问会立刻注销所有远程登录与远程 agent 会话；重新开启后需重新登录，旧凭据不会复活。切换监听时本机 HTTP MCP 有短暂重连窗口，stdio 与本机页面不受影响。该功能面向可信局域网，明文传输；请勿在不可信网络使用。Windows 防火墙首次弹窗请自行确认放行（程序不会自动添加规则）。
+
 
 绝对坐标工具使用截图返回的 `basis_id` 和该截图的像素坐标。相对工具使用 HID 计数，受到目标加速度和边界影响；应小幅移动后重新观察，不能将计数直接当作像素。接口返回 `written` 只表示报告已写出，目标是否完成操作应通过新截图确认。
 

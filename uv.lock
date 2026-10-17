@@ -941,6 +941,7 @@ app = [
     { name = "pyserial" },
     { name = "pystray" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "uvicorn" },
 ]
 packaging = [
     { name = "pyinstaller" },
@@ -965,6 +966,7 @@ requires-dist = [
     { name = "pyserial", marker = "extra == 'app'", specifier = "==3.5" },
     { name = "pystray", marker = "extra == 'app'", specifier = "==0.19.5" },
     { name = "pywin32", marker = "sys_platform == 'win32' and extra == 'app'", specifier = ">=308,<400" },
+    { name = "uvicorn", marker = "extra == 'app'", specifier = ">=0.34,<1" },
 ]
 provides-extras = ["app", "packaging"]
 

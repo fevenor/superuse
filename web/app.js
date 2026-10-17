@@ -21,6 +21,8 @@ const state = {
   csrf: null,
   pageToken: null,
   pageSessionId: null,
+  lan: false,           // true when authenticated through the LAN key entry
+  heartbeatFailures: 0,
   revision: -1,
   nextRenew: 0,
   renewingLease: null,
@@ -29,6 +31,9 @@ const state = {
   humanLatched: false,
   source: null,
   frameAgeMs: null,
+  serialStatus: null,
+  videoStatus: null,
+  pauseReason: null,
   connected: false,
   viewOnly: false,
   showCursor: true,
@@ -47,6 +52,17 @@ const state = {
 /* ------------------------------------------------------------------ */
 /* Authentication: bootstrap fragment -> browser context -> page       */
 /* ------------------------------------------------------------------ */
+
+function newRequestId() {
+  // LAN HTTP is not a secure context: randomUUID may be absent, while
+  // getRandomValues remains available. Preserve the UUID v4 wire contract.
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 async function api(path, options = {}) {
   const headers = Object.assign({"Content-Type": "application/json"}, options.headers || {});
@@ -76,9 +92,11 @@ async function authenticate() {
     });
     state.csrf = context.csrf_token;
     state.instanceId = context.instance_id;
+  } else if (await tryLanEntry()) {
+    // LAN entry: key login already produced a LAN cookie + CSRF.
   } else {
-    // Existing cookie identity: read the context (a fresh page session is
-    // created per load; old leases never carry over).
+    // Existing local cookie identity: read the context (a fresh page session
+    // is created per load; old leases never carry over).
     const context = await api("/v1/browser/context");
     state.csrf = context.csrf_token;
     state.instanceId = context.instance_id;
@@ -91,6 +109,54 @@ async function authenticate() {
   state.pageSessionId = grant.session_id;
   state.instanceId = grant.instance_id;
 }
+
+/* LAN entry (task 2026-10-17 T5): /lan/context exists only on the LAN
+ * listener. 404 -> this is the local entry; 401 -> key login required. */
+async function tryLanEntry() {
+  let context;
+  try {
+    context = await api("/lan/context");
+  } catch (err) {
+    if (err.code === 404 || err.code === "NOT_FOUND") return false;
+    if (err.code !== "AUTH_FAILED") throw err;
+    context = await showLanLogin();
+  }
+  state.csrf = context.csrf_token;
+  state.instanceId = context.instance_id;
+  state.lan = true;
+  document.getElementById("btnLogout").hidden = false;
+  return true;
+}
+
+function showLanLogin() {
+  return new Promise((resolve, reject) => {
+    const box = document.getElementById("login");
+    const errorEl = document.getElementById("loginError");
+    const input = document.getElementById("loginKey");
+    box.hidden = false;
+    input.focus();
+    document.getElementById("loginForm").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      errorEl.textContent = "";
+      try {
+        await api("/lan/login", {method: "POST", body: JSON.stringify({key: input.value})});
+        const context = await api("/lan/context");
+        box.hidden = true;
+        resolve(context);
+      } catch (err) {
+        if (err.code === "AUTH_FAILED") errorEl.textContent = "密钥错误";
+        else if (err.code === "RATE_LIMITED") errorEl.textContent = "尝试过于频繁，请稍候";
+        else if (err.code === "FORBIDDEN") errorEl.textContent = "局域网访问未开启";
+        else errorEl.textContent = `${err.code || ""} ${err.message}`;
+      }
+    }, {once: false});
+  });
+}
+
+document.getElementById("btnLogout").addEventListener("click", async () => {
+  try { await api("/lan/logout", {method: "POST", body: "{}"}); } catch (e) { /* already gone */ }
+  location.reload();
+});
 
 /* ------------------------------------------------------------------ */
 /* WebSockets                                                          */
@@ -136,6 +202,7 @@ function openEvents() {
 
 function openInput() {
   if (state.wsInput) return;
+  resetInputFlow();
   const ws = new WebSocket(wsUrl("/v1/input"));
   state.wsInput = ws;
   state.sequence = 0;
@@ -146,6 +213,8 @@ function openInput() {
     if (state.wsInput !== ws) return;
     state.wsInput = null;
     state.lease = null;
+    state.pauseReason = "输入连接已断开";
+    resetInputFlow();
     discardRelative();
     releaseLocalKeys();
     updateControls();
@@ -158,15 +227,18 @@ function openInput() {
     if (ack.type === "input_ack" && ack.status === "rejected") {
       const code = ack.error && ack.error.code;
       flashError({code, message: ack.error ? ack.error.message : "输入被拒绝"});
-      if (code === "INPUT_BACKPRESSURE") closeInput();
+      if (code === "INPUT_BACKPRESSURE") closeInput("输入队列积压，已释放按键");
       if (code === "CONTROL_REVOKED" || code === "HUMAN_CONTROL" || code === "LEASE_EXPIRED") {
-        state.lease = null;  // control lost; state events will update the UI
+        closeInput("控制租约已失效");
       }
     }
+    acknowledgeInput(ack);
   };
 }
 
-function closeInput() {
+function closeInput(reason = null) {
+  if (reason) state.pauseReason = reason;
+  resetInputFlow();
   discardRelative();
   state.lease = null;
   if (document.pointerLockElement === canvas) document.exitPointerLock();
@@ -174,16 +246,101 @@ function closeInput() {
   releaseLocalKeys();
 }
 
-function sendInput(action) {
+// Motion is sampled before sequence assignment. Keep recent intent instead
+// of replaying an unbounded history when the device is slower than the mouse.
+// State transitions (including button/key releases) remain ordered/lossless.
+const MAX_INPUT_IN_FLIGHT = 4, MAX_PENDING_INPUTS = 128;
+const MAX_PENDING_RELATIVE_COUNTS = 254, MAX_MOTION_AGE_MS = 50;
+const pendingInput = [], inputInFlight = new Set();
+let queuedMouseButtons = 0;
+
+function resetInputFlow() {
+  pendingInput.length = 0;
+  inputInFlight.clear();
+  queuedMouseButtons = 0;
+}
+
+function boundMotion(action, limit = MAX_PENDING_RELATIVE_COUNTS) {
+  const scale = Math.max(1, Math.abs(action.dx) / limit, Math.abs(action.dy) / limit);
+  action.dx = Math.round(action.dx / scale);
+  action.dy = Math.round(action.dy / scale);
+}
+
+function sendInput(action, motion = false) {
   if (!state.wsInput || state.wsInput.readyState !== WebSocket.OPEN) return;
   if (!state.lease) return;
-  state.sequence += 1;
-  state.wsInput.send(JSON.stringify({
-    api_version: 1,
-    sequence: state.sequence,
-    lease: state.lease,
-    action,
-  }));
+  // Movement may report a button change if a DOM button event was missed.
+  // Preserve that change independently so expiring motion cannot drop it.
+  if (motion && action.buttons !== queuedMouseButtons) {
+    sendInput(action.kind === "mouse_relative_state" ? {...action, dx: 0, dy: 0} : action);
+    if (!state.lease) return;
+  }
+  if (action.kind === "mouse_relative_state" || action.kind === "mouse_state") {
+    queuedMouseButtons = action.buttons;
+  }
+  const now = performance.now();
+  const tail = pendingInput.at(-1);
+  if (motion && tail?.motion && action.kind === "mouse_relative_state"
+      && tail.action.kind === action.kind && tail.action.buttons === action.buttons) {
+    for (const axis of ["dx", "dy"]) {
+      // Under saturation a reversal expresses new intent; don't spend time
+      // cancelling a large old vector before moving in the new direction.
+      if (now - tail.updated > MAX_MOTION_AGE_MS
+          || (tail.saturated && action[axis] && Math.sign(action[axis]) !== Math.sign(tail.action[axis]))) {
+        tail.action[axis] = 0;
+      }
+      tail.action[axis] += action[axis];
+    }
+    tail.saturated = Math.max(Math.abs(tail.action.dx), Math.abs(tail.action.dy)) > MAX_PENDING_RELATIVE_COUNTS;
+    boundMotion(tail.action);
+    tail.updated = now;
+  } else if (motion && tail?.motion && action.kind === "mouse_state" && tail.action.kind === action.kind
+      && tail.action.buttons === action.buttons && tail.action.basis_id === action.basis_id) {
+    tail.action = {...action};
+    tail.updated = now;
+  } else {
+    if (pendingInput.length >= MAX_PENDING_INPUTS) {
+      closeInput("输入队列积压，已释放按键");
+      return;
+    }
+    const entry = {action: {...action}, motion, updated: now, saturated: false};
+    if (motion && action.kind === "mouse_relative_state") {
+      const freeSlots = pendingInput.length ? 0 : MAX_INPUT_IN_FLIGHT - inputInFlight.size;
+      const budget = MAX_PENDING_RELATIVE_COUNTS + freeSlots * 127;
+      entry.saturated = Math.max(Math.abs(action.dx), Math.abs(action.dy)) > budget;
+      boundMotion(entry.action, budget);
+    }
+    pendingInput.push(entry);
+  }
+  pumpInput();
+}
+
+function acknowledgeInput(ack) {
+  if (!["written", "coalesced", "rejected"].includes(ack.status)) return;
+  if (inputInFlight.delete(ack.sequence)) pumpInput();
+}
+
+function pumpInput() {
+  while (pendingInput.length && inputInFlight.size < MAX_INPUT_IN_FLIGHT
+      && state.lease && state.wsInput?.readyState === WebSocket.OPEN) {
+    const entry = pendingInput[0];
+    if (entry.motion && performance.now() - entry.updated > MAX_MOTION_AGE_MS) {
+      pendingInput.shift();
+      continue;
+    }
+    let action = entry.action;
+    if (action.kind === "mouse_relative_state") {
+      const segments = Math.max(1, Math.ceil(Math.abs(action.dx) / 127), Math.ceil(Math.abs(action.dy) / 127));
+      if (segments > 1) {
+        const dx = Math.round(action.dx / segments), dy = Math.round(action.dy / segments);
+        action.dx -= dx; action.dy -= dy;
+        action = {...action, dx, dy, wheel: 0};
+      } else pendingInput.shift();
+    } else pendingInput.shift();
+    const sequence = ++state.sequence;
+    inputInFlight.add(sequence);
+    state.wsInput.send(JSON.stringify({api_version: 1, sequence, lease: state.lease, action}));
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -317,7 +474,7 @@ canvas.addEventListener("mousemove", (e) => {
   const point = imageCoords(e);
   if (!point) return;
   sendInput({kind: "mouse_state", basis_id: lastMeta ? lastMeta.basis_id : null,
-             x: Math.floor(point.x), y: Math.floor(point.y), buttons: e.buttons});
+             x: Math.floor(point.x), y: Math.floor(point.y), buttons: e.buttons}, true);
 });
 let awaitingPointerLock = false;
 canvas.addEventListener("mousedown", (e) => {
@@ -349,18 +506,9 @@ function sendMouse(e) {
 }
 
 function sendRelative(dx, dy, buttons, wheel = 0) {
-  // Preserve deltas: unlike absolute mousemove these events cannot be replaced
-  // with the last point. Server queue limits and input acks remain authoritative.
   dx = Math.round(dx); dy = Math.round(dy);
-  const segments = Math.max(1, Math.ceil(Math.abs(dx) / 127), Math.ceil(Math.abs(dy) / 127));
-  if (segments > 32) { closeInput(); flashError(new Error("相对位移过大，请重新接管")); return; }
-  let previousX = 0, previousY = 0;
-  for (let i = 1; i <= segments; i++) {
-    const x = Math.round(dx * i / segments), y = Math.round(dy * i / segments);
-    sendInput({kind: "mouse_relative_state", dx: x - previousX, dy: y - previousY,
-               buttons, wheel: i === 1 ? wheel : 0});
-    previousX = x; previousY = y;
-  }
+  if (!Number.isSafeInteger(dx) || !Number.isSafeInteger(dy)) return;
+  sendInput({kind: "mouse_relative_state", dx, dy, buttons, wheel}, !!(dx || dy) && !wheel);
 }
 
 let relativeTimer = null, pendingX = 0, pendingY = 0, pendingButtons = 0;
@@ -369,7 +517,7 @@ function queueRelative(dx, dy, buttons) {
   if (buttons !== pendingButtons) flushRelative();
   pendingButtons = buttons;
   pendingX += dx; pendingY += dy;
-  if (relativeTimer === null) relativeTimer = setTimeout(flushRelative, 8);
+  if (relativeTimer === null) relativeTimer = setTimeout(flushRelative, 16);
 }
 function flushRelative() {
   if (relativeTimer !== null) clearTimeout(relativeTimer);
@@ -467,9 +615,9 @@ canvas.addEventListener("keyup", (e) => {
 /* Losing focus while holding control parks control in human_hold
  * (the input connection closes server-side); the page re-takes over with
  * the button after refocusing. */
-window.addEventListener("blur", () => { if (state.lease) closeInput(); });
+window.addEventListener("blur", () => { if (state.lease) closeInput("页面失去焦点"); });
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden && state.lease) closeInput();
+  if (document.hidden && state.lease) closeInput("页面已切到后台");
 });
 
 /* ------------------------------------------------------------------ */
@@ -483,7 +631,7 @@ function comboKeySequence(modifierCodes, keyCode) {
     method: "POST",
     body: JSON.stringify({
       api_version: 1,
-      request_id: crypto.randomUUID(),
+      request_id: newRequestId(),
       lease: state.lease,
       action: {kind: "press_key", code: keyCode, modifiers},
     }),
@@ -520,10 +668,11 @@ document.getElementById("btnTakeover").addEventListener("click", async () => {
   try {
     const grant = await api("/v1/control/takeover", {
       method: "POST",
-      body: JSON.stringify({request_id: crypto.randomUUID()}),
+      body: JSON.stringify({request_id: newRequestId()}),
     });
     if (grant.state.state_revision < state.revision) throw new Error("控制状态已改变，请重新接管");
     state.lease = grant.lease;
+    state.pauseReason = null;
     state.nextRenew = performance.now() + Math.min(4000, grant.expires_in_ms / 3);
     applyState(grant.state);
     openInput();
@@ -535,7 +684,7 @@ document.getElementById("btnHandback").addEventListener("click", async () => {
   try {
     const next = await api("/v1/control/handback", {
       method: "POST",
-      body: JSON.stringify({request_id: crypto.randomUUID()}),
+      body: JSON.stringify({request_id: newRequestId()}),
     });
     state.lease = null;
     closeInput();
@@ -562,12 +711,14 @@ function applyState(next, reason) {
   state.humanLatched = next.human_latched !== undefined ? next.human_latched : state.humanLatched;
   state.source = next.source !== undefined ? next.source : state.source;
   state.frameAgeMs = next.frame_age_ms !== undefined ? next.frame_age_ms : state.frameAgeMs;
+  state.serialStatus = next.serial_status !== undefined ? next.serial_status : state.serialStatus;
+  state.videoStatus = next.video_status !== undefined ? next.video_status : state.videoStatus;
   document.body.classList.toggle("simulated", state.source === "simulated");
 
   const ownerText = next.owner ? `${next.owner.kind}（${next.owner.label}）` : "无";
   const modeText = {
     idle: "空闲", agent: "agent 控制中", human: "人工控制",
-    human_hold: "人工暂停（仍阻止 agent，可接管或交还）", transition: "接管屏障中…",
+    human_hold: "人工控制已暂停（agent 仍被阻止）", transition: "接管屏障中…",
     recovery: "恢复中", stopping: "停止中",
   }[state.mode] || state.mode;
   statusEl.textContent = `${modeText} · 所有者 ${ownerText} · 串口 ${next.serial_status || "?"} · 视频 ${next.video_status || "?"}`;
@@ -578,18 +729,36 @@ function applyState(next, reason) {
   if (!ownLease) closeInput();
   updateControls();
   if (ownLease && !state.wsInput) openInput();
-  const reasons = {human_input_closed: "输入连接已关闭", human_lease_expired: "租约已过期",
-    human_session_closed: "页面会话已结束"};
-  if (state.mode === "human_hold" && reasons[reason]) statusEl.textContent += ` · ${reasons[reason]}`;
-  if (state.mode === "recovery") showOverlay("恢复中", "设备状态不确定，正在中和与恢复…");
+  const reasons = {human_lease_expired: "控制租约已过期", human_session_closed: "页面会话已结束",
+    input_backpressure_fence: "输入队列积压，已释放按键"};
+  if (state.mode === "human_hold") {
+    if (reasons[reason]) state.pauseReason = reasons[reason];
+    if (!state.pauseReason && reason === "human_input_closed") state.pauseReason = "输入连接已关闭";
+    statusEl.textContent += ` · ${state.pauseReason || "等待人工恢复"} · 点击“接管”继续，或“交还”允许 agent`;
+  }
+  const videoDown = state.videoStatus === "disconnected" || state.videoStatus === "fault";
+  const serialDown = state.serialStatus === "disconnected" || state.serialStatus === "fault";
+  if (videoDown || serialDown) {
+    const detail = next.video_detail || next.serial_detail || "等待 SuperKVM 设备接入…";
+    showOverlay("请连接 SuperKVM 设备", detail);
+  } else if (state.mode === "recovery") showOverlay("恢复中", "设备状态不确定，正在中和与恢复…");
   else if (state.mode !== "idle") overlay.hidden = true;
   else overlay.hidden = !overlay.hidden ? true : overlay.hidden;
+}
+
+function deviceReady() {
+  // Only an explicitly bad device state disables control; a state event that
+  // omits the fields (older consumers, tests) changes nothing.
+  const serialDown = state.serialStatus === "disconnected" || state.serialStatus === "fault";
+  const videoDown = state.videoStatus === "disconnected" || state.videoStatus === "fault";
+  return !(serialDown || videoDown);
 }
 
 function updateControls() {
   const takeoverBtn = document.getElementById("btnTakeover");
   const handbackBtn = document.getElementById("btnHandback");
-  takeoverBtn.disabled = !!state.lease || state.mode === "transition" || state.mode === "stopping";
+  takeoverBtn.disabled = !!state.lease || state.mode === "transition" || state.mode === "stopping"
+    || !deviceReady();
   handbackBtn.disabled = !(state.mode === "human_hold" || (state.mode === "human" && state.lease));
   takeoverBtn.classList.toggle("takeover-active", state.mode === "human");
 }
@@ -601,7 +770,12 @@ function updateCursor() {
 
 setInterval(() => {
   if (!state.pageToken) return;
-  api("/v1/session/heartbeat", {method: "POST", body: "{}"}).catch(() => {});
+  api("/v1/session/heartbeat", {method: "POST", body: "{}"}).then(() => {
+    state.heartbeatFailures = 0;
+  }).catch((err) => {
+    // A LAN generation change kills the cookie chain: re-login via reload.
+    if (state.lan && err.code === "AUTH_FAILED" && ++state.heartbeatFailures >= 3) location.reload();
+  });
 }, 5000);
 
 setInterval(() => {
@@ -610,7 +784,7 @@ setInterval(() => {
     state.renewingLease = lease;
     api("/v1/control/renew", {
       method: "POST",
-      body: JSON.stringify({request_id: crypto.randomUUID(), lease}),
+      body: JSON.stringify({request_id: newRequestId(), lease}),
     })
       .then((grant) => {
         if (state.lease === lease) state.nextRenew = performance.now() + Math.min(4000, grant.expires_in_ms / 3);

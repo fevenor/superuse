@@ -147,7 +147,9 @@ async def test_cancel_covers_entire_submission(broker, monkeypatch, phase):
 
 
 async def test_capture_retries_after_closed_source_and_long_absence(tmp_path, monkeypatch):
-    broker = Broker(load_config(), runtime_dir=tmp_path / "runtime")
+    broker = Broker(
+        load_config(overrides={"device": {"mode": "simulated"}}), runtime_dir=tmp_path / "runtime"
+    )
     clock = VirtualClock()
     broker.clock = clock
     supervisor = DeviceSupervisor(broker)
@@ -191,7 +193,9 @@ async def test_capture_retries_after_closed_source_and_long_absence(tmp_path, mo
 
 @pytest.mark.parametrize("close_raises", [False, True])
 async def test_capture_hung_close_never_opens_second_source(tmp_path, monkeypatch, close_raises):
-    broker = Broker(load_config(), runtime_dir=tmp_path / "runtime")
+    broker = Broker(
+        load_config(overrides={"device": {"mode": "simulated"}}), runtime_dir=tmp_path / "runtime"
+    )
     broker.clock = VirtualClock()
     supervisor = DeviceSupervisor(broker)
 

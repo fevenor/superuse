@@ -4,18 +4,22 @@
 
 ## 1. 公共规则
 
-- API 前缀 `/v1`，仅绑定 `127.0.0.1` 的 OS 分配端口。同一进程通过 runtime 文件发现地址。
+- 内部 API 前缀 `/v1`，仅绑定 `127.0.0.1` 的 OS 分配端口。同一进程通过 runtime 文件发现地址。
+- 另有两个对外入口（默认关闭，见第 8 节）：局域网浏览器 `lan_host:web_port` 与 Streamable HTTP MCP `lan_host:mcp_port/mcp`，共用 `[network] key` 的单一密钥；密钥只作准入，不构成身份。
 - 所有 JSON 为 UTF-8。未知字段拒绝；版本为整数 `1`。request body 上限 64KiB，文本另有更小限制。
 - actor/role 来自认证会话，绝不从请求 body 采信。API 不接受客户端指定 session_id。
 - 错误形式为 `{"error":{"code":"CONTROL_REVOKED","message":"Control changed","retryable":false},"request_id":"..."}`。不把 traceback 或秘密返回客户端。
 - 请求尚无合法 request_id（如坏 JSON/认证前失败）时，错误中的 request_id 由服务端生成，仅用于追踪，不能拿它重放原输入。
 - session/lease 失效属于正常业务错误；HTTP 认证失败 401，角色/CSRF/Origin 失败 403，schema 失败 400，状态冲突 409，过期 basis 410，限流 429，后端不可用 503。
 - `request_id` 为客户端生成 UUID。对 control 写操作和输入作业，服务端按 `(session, request_id)` 保存 120 秒内最多 1024 项结果与 body hash。相同请求只返回同一结果；相同 ID 不同 body 返回 REQUEST_ID_CONFLICT。满容量时拒绝新写请求，不能提前逐出仍在去重窗口内的项。高频人工状态流另用连接内 sequence 去重，不占此作业缓存。
+- 浏览器兼容局域网明文 HTTP：`crypto.randomUUID` 不可用时，通过 `crypto.getRandomValues` 生成 UUID v4；接管、交还、续租和快捷键统一使用该实现，不能以启用 HTTPS 作为使用前提。
 - 幂等缓存中的旧成功响应不代表租约仍有效；每次实际输入继续校验。broker 重启后 instance 改变，旧写请求拒绝，不自动重发。
 
 ## 2. MCP 工具
 
-使用官方 SDK，通过 stdio 对接。首版不暴露 MCP HTTP 或旧 SSE 端点。不同 agent 启动各自的 `superuse mcp --client-label ...`；每个桥连接同一 broker，创建不同 agent session。
+使用官方 SDK（锁定版本）。stdio 桥：不同 agent 启动各自的 `superuse mcp --client-label ...` / `SuperuseMCP.exe`；每个桥连接同一 broker，创建不同 agent session，配置中无需 key。
+
+Streamable HTTP（任务 2026-10-17）：`Superuse.exe` 在 `127.0.0.1:mcp_port`（配置 key 后）或 `lan_host:mcp_port`（LAN 开启后）提供 `/mcp`。每次 HTTP 请求校验 `Authorization: Bearer <key>`（key 的 UTF-8 字节原样作为 token；非 ASCII key 按此编码规则发送）。身份是 SDK 标准 transport session（`Mcp-Session-Id`，服务端生成）：每个传输会话懒创建一个独立 `BrokerClient`（独立 broker 会话、租约、续租/空闲策略、取消与作业归属），会话终止（DELETE/空闲超时/重绑）即关闭并释放。两个同名 label 的客户端仍是不同 session；同一 TCP 连接不合并 agent，不同连接也不代表不同 agent。无 Origin 的已认证 agent 请求允许；浏览器 Origin 按实际监听地址校验。工具 schema、截图返回、资源（`superuse://state`）与错误码和 stdio 共用。
 
 工具参数均不接受客户端 session、任意路径、raw serial 或角色。桥保存 acquire 返回的 lease，后续输入工具自动附加它；工具本身不自动 acquire。桥断开、失权或 instance 改变时清空 lease。
 
@@ -60,7 +64,8 @@ relative 工具与既有绝对工具独立提供；绝对模式不兼容时可�
 | POST `/v1/ui/launch` | 独立 launcher bearer | 创建短期一次性打开 URL；供第二实例 `open` 使用，agent token 不允许调用 |
 | POST `/v1/session/heartbeat` | 已认证 | 延长会话活性，不隐式续控制 lease |
 | DELETE `/v1/session` | 已认证 | 清理自身会话并按 owner 状态释放/hold |
-| GET `/v1/state` | 已认证 | 当前 State，不包含任何 lease/token |
+| GET `/v1/state` | 已认证 | 当前 State，不包含任何 lease/token；设备未就绪时附 `serial_detail`/`video_detail`（有界脱敏原因，可选字段） |
+| GET `/v1/network` | 已认证 | 无密钥的网络状态：enabled、key_configured、generation、reason（disabled/key_missing/bind_error）、实际本机地址列表与端口；永不回显 key |
 | GET `/v1/status` | 已认证 | StatusResponse，包含 State 与当前可用工具名称 capabilities |
 | POST `/v1/control/acquire` | agent | `{request_id,ttl_ms}`，返回私有 Lease + State |
 | POST `/v1/control/renew` | lease owner | `{request_id,lease,ttl_ms}`，返回新 expires_in_ms |
@@ -97,11 +102,15 @@ video 每个 binary message：前 4 字节大端 uint32 表示 UTF-8 JSON header
 
 input 只接受 JSON text HumanInputEnvelope：api_version、sequence、lease、action。action 仅 keyboard_state、mouse_state、mouse_scroll；其他离散工具栏动作走 HTTP CommandEnvelope。服务端绑定 WS session，逐次检查有效 lease，并直接进入同一 InputScheduler/SerialActor 的有界事件流；不能直接 serial.write。
 
-v1 增量还允许人工专用 `mouse_relative_state`：`dx,dy` 各为 -127–127 整数，`buttons` 为完整位掩码 0–7，`wheel=0` 为 -127–127 整数。每条对应一个相对报告；不接受 basis/x/y，不创建持久作业。agent 无权调用该持久状态动作。相对位移不能用最后值覆盖；队列满时明确拒绝并将人工 owner fence 到 human_hold，避免丢位移/抬起。
+v1 增量还允许人工专用 `mouse_relative_state`：`dx,dy` 各为 -127–127 整数，`buttons` 为完整位掩码 0–7，`wheel=0` 为 -127–127 整数。每条对应一个相对报告；不接受 basis/x/y，不创建持久作业。agent 无权调用该持久状态动作。服务端不静默丢弃已接收的相对报告；队列满时明确拒绝并将人工 owner fence 到 human_hold，避免静默丢弃抬起事件。浏览器可以在分配 sequence 前采样、合并和压缩纯移动。
 
 人工页面默认 relative，可通过模式下拉框选择路径；仅将鼠标模式偏好保存在 localStorage。relative 下接管后点击画面请求 Pointer Lock，第一次捕获手势不传给目标。Esc/退出捕获、模式切换在同一有序 input 流发送键盘与鼠标零状态，保留租约；再次点击画面即可捕获。失焦、隐藏、输入断连仍撤销输入并保留人工 latch，页面在 human_hold 同时提供“接管”和“交还”。不写固件配置，不自动抢占 agent。
 
-相对 mousemove 在页面按 8ms 累计位移后分包，按钮/滚轮/键盘事件先刷新此前位移，不能按最后相对位移覆盖。input 连接绑定其当前租约；更换租约需新连接，旧连接关闭清理只作用于绑定租约。页面按 state_revision 合并完整状态，并按 session/generation 判断所有权；旧连接回调不能清理新连接。租约按返回 TTL 的三分之一（最长 4 秒）续租。
+相对 mousemove 在页面按 16ms 采样，发送窗口最多保留 4 条等待终态回执的报告；只有 written/coalesced/rejected 回收窗口，accepted 不代表串口写完。窗口满时合并相同按钮状态、无滚轮的连续移动；待发的一段纯移动向量最多保留每轴 254 计数（按比例压缩，最多两条 HID 报告）。饱和后的反向输入优先表达新方向；最后更新超过 50ms 的未发送纯移动会过期。正常未过载位移保留计数，过载不承诺全部计数补发，也不因纯移动饱和而断开输入或撤销人工租约。
+
+按钮变化独立于可过期移动保存，按钮/滚轮/键盘事件保持先后顺序且不随移动过期；本地状态事件队列仍有 128 项上限，真实异常溢出仍走受控暂停。绝对位置仅合并尚未发送的同 basis/按钮状态移动事件，服务端也不得替换正在写入的事件。失权/断连清空尚未发送的队列，旧输入不跨连接重放。依据、取舍和验证见[人工鼠标流控](input-flow-control.md)。
+
+input 连接绑定其当前租约；更换租约需新连接，旧连接关闭清理只作用于绑定租约。页面按 state_revision 合并完整状态，并按 session/generation 判断所有权；旧连接回调不能清理新连接。租约按返回 TTL 的三分之一（最长 4 秒）续租。
 
 sequence 在每条新输入连接上从 1 递增。严格接收下一序号，重复序号只返回最多保留 64 项中的旧 InputAck，不重新发包；过旧/缺号返回 SEQUENCE_OUT_OF_ORDER。已收到但业务拒绝的事件仍消耗其序号。新连接/失权后不得自动重放旧输入，先按状态机恢复人工控制。事件流仅保留 128 项有界待执行输入和 64 项回执，不把每个 mousemove 存成 120 秒 Job。
 
@@ -109,7 +118,15 @@ InputAck 带 sequence、status=accepted/written/coalesced/rejected；rejected �
 
 心跳使用 WS ping/pong + session 活性。仅保持 video 连接不授予控制。
 
-## 5. 坐标和画面新鲜度
+## 5. LAN 入口（可信局域网）
+
+`config.toml [network]`：`key`（任意非空字符串，精确比较，不 trim/大小写/归一化；空 = 未配置，等价于关闭而非免认证）、`web_port=18765`、`mcp_port=18766`（两端口必须不同）、`lan_host="0.0.0.0"`（可填单一本机 IPv4）。配置修改重启生效；LAN 开关是托盘的进程内事务，不写配置。
+
+LAN web 监听 `lan_host:web_port`，路由为内部 API 的控制子集：`POST /lan/login {key}` → 一次性设置 `superuse_lan` cookie（HttpOnly、SameSite=Strict；明文 HTTP 不设 Secure）并返回 CSRF；`GET /lan/context`、`POST /lan/logout`；随后 `/v1/sessions/page`（entrance=lan，绑定 network generation）→ `/v1/state|status`、takeover/handback/renew、commands/jobs、frames 与三条 WS。不暴露本机管理面（bootstrap 签发、`/v1/ui/launch`、agent 会话创建、runtime 读取）。LAN cookie 与本机 `superuse_browser` 是不同名字空间，互不解释；错误 key/未登录 401，限流 429，跨源 403。
+
+托盘开关语义：开启 = 先绑 web、再把 HTTP MCP 重绑到 `lan_host`（本机会话有短暂重连窗口），两入口都成功才显示开启；任一失败回滚并恢复本机 MCP，`reason=bind_error` 带具体端口。关闭 = 先提升 network generation（旧 cookie/page token/MCP 会话立即失效且不可复活）→ 远程 owner 经控制管理器释放屏障清理（仅 LAN 入口的会话，本机 owner 不动）→ 拆监听 → 本机 MCP 回到 127.0.0.1。重复开关经互斥锁串行化。防火墙由用户按系统提示放行，程序不建永久规则。
+
+## 6. 坐标和画面新鲜度
 
 MVP 关闭自动裁边，显示完整采集画面。捕获实际 native_width/native_height；给 agent 的图片可以等比缩小，不放大。每种当前采集 generation、geometry 与编码尺寸对应一个服务端注册的 `basis_id`，同时绑定 instance。
 
@@ -121,7 +138,7 @@ basis 在所属实例、采集 generation、geometry、profile 仍有效时可�
 
 视频 >1000ms 未更新时，拒绝新的普通输入并返回 VIDEO_STALE；>2000ms 撤销当前 lease 进入 recovery。在这两个阈值之间维持状态但不能继续输入。恢复必须按状态机重新中和。时间差取 monotonic，不从 UTC 时钟相减。
 
-## 6. Command 与 Job
+## 7. Command 与 Job
 
 CommandEnvelope 字段：api_version、request_id、lease、action。action.kind 对应 schema 中的枚举：press_key/type_text/mouse_move/mouse_click/mouse_drag/mouse_scroll/keyboard_state/mouse_state/release_inputs。
 
@@ -133,7 +150,7 @@ Job 状态为 accepted/running/written/cancelled/failed。terminal=true 当且�
 
 作业总 deadline 默认 30000ms；超过返回 ACTION_TIMEOUT，取消剩余部分并中和有效 owner。已完成结果 TTL 120 秒，作业表最多 1024；满时拒绝新作业。不自动重试任何结果不确定的输入；桥仅能以同 request_id 查询旧结果。连接失效而无法查询时向 agent 返回 RESULT_UNKNOWN。
 
-## 7. 错误代码
+## 8. 错误代码
 
 | code | 含义/客户端动作 |
 |---|---|

@@ -20,3 +20,13 @@ canvas{display:block;image-rendering:auto;cursor:default;outline:none}
 body.fs-autohide #toolbar{position:fixed;top:0;z-index:10;transform:translateY(-100%);transition:transform .3s ease;pointer-events:none;border-radius:0 0 8px 8px;box-shadow:0 2px 12px rgba(0,0,0,.5)}
 body.fs-autohide #toolbar.visible{transform:translateY(0);pointer-events:auto}
 body.fs-autohide #container{height:100%}
+/* LAN key login (task 2026-10-17 T5): same visual language as the overlay. */
+#login[hidden]{display:none}
+#login{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,10,26,.92);z-index:20}
+#loginForm{display:flex;flex-direction:column;gap:10px;background:#16213e;border:1px solid #1a1a5e;border-radius:8px;padding:24px;min-width:280px}
+#loginTitle{font-size:16px;font-weight:600}
+#loginKey{background:#0a0a1a;border:1px solid #1a1a5e;color:#e0e0e0;padding:8px;border-radius:4px;font-size:14px}
+#loginKey:focus{outline:1px solid #1a4a8a}
+#loginSubmit{background:#0f3460;border:1px solid #1a4a8a;color:#e0e0e0;padding:8px;border-radius:4px;cursor:pointer;font-size:14px}
+#loginSubmit:hover{background:#1a4a8a}
+#loginError{font-size:12px;color:#c86a5a;min-height:14px}

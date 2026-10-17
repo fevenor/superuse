@@ -1,9 +1,15 @@
-"""MCP server: Superuse tools over stdio (docs/development/api-contract.md §2).
+"""MCP server: Superuse tools over stdio and Streamable HTTP (api-contract §2).
 
 Built on the locked official SDK v2 (MCPServer). stdout carries MCP only;
 diagnostics go to stderr. Tools never accept session ids, paths or raw
 serial; the bridge attaches its own lease. Successful input tools report
 ``completion="written"`` — no target-UI confirmation is implied.
+
+Client binding (task 2026-10-17 T4): ``build_server`` accepts either one
+``BrokerClient`` (the stdio bridge) or an async resolver that maps a request
+context to a client (the HTTP service, one independent client per MCP
+transport session). Tool bodies always go through the resolver so both
+transports share one implementation.
 """
 
 from __future__ import annotations
@@ -13,9 +19,10 @@ import base64
 import json
 import logging
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.mcpserver.utilities.types import Image
 from mcp.types import TextContent
@@ -85,12 +92,39 @@ _ACQUIRE_HINT = (
     "Acquire control with acquire_control first; observe the state, do not retry in a tight loop."
 )
 
+ClientResolver = Callable[[Context], Awaitable[BrokerClient]]
+StateProvider = Callable[[], dict]
+
 
 def _bridge_error(exc: BridgeError) -> ToolError:
     return ToolError(f"{exc.code}: {exc.args[0]}")
 
 
-def build_server(client: BrokerClient) -> MCPServer:
+def build_server(
+    client: BrokerClient | ClientResolver,
+    *,
+    state_provider: StateProvider | None = None,
+) -> MCPServer:
+    """Build the Superuse MCPServer.
+
+    ``client`` is either a single bound BrokerClient (stdio bridge) or an
+    async ``Context -> BrokerClient`` resolver (HTTP service: one client per
+    MCP transport session). ``state_provider`` optionally serves the
+    ``superuse://state`` resource without a per-session client (resources
+    carry no request context in the locked SDK).
+    """
+    if isinstance(client, BrokerClient):
+        fixed_client: BrokerClient | None = client
+
+        async def _client(_ctx: Context) -> BrokerClient:
+            assert fixed_client is not None
+            return fixed_client
+
+        resolver = _client
+    else:
+        fixed_client = None
+        resolver = client
+
     server: MCPServer = MCPServer(
         name="superuse",
         instructions=(
@@ -104,11 +138,13 @@ def build_server(client: BrokerClient) -> MCPServer:
         ),
     )
 
-    async def get_status() -> str:
+    async def get_status(ctx: Context) -> str:
+        client = await resolver(ctx)
         status = await client.get_status()
         return json.dumps(status, ensure_ascii=False)
 
-    async def acquire_control(ttl_ms: int = 15000) -> str:
+    async def acquire_control(ctx: Context, ttl_ms: int = 15000) -> str:
+        client = await resolver(ctx)
         ttl = max(5000, min(30000, int(ttl_ms)))
         try:
             grant = await client.acquire(ttl_ms=ttl)
@@ -123,13 +159,18 @@ def build_server(client: BrokerClient) -> MCPServer:
             ensure_ascii=False,
         )
 
-    async def release_control() -> str:
+    async def release_control(ctx: Context) -> str:
+        client = await resolver(ctx)
         await client.release()
         return json.dumps({"released": True})
 
     async def capture_screen(
-        max_width: int = 1280, after_frame_id: int | None = None, wait_ms: int = 2000
+        ctx: Context,
+        max_width: int = 1280,
+        after_frame_id: int | None = None,
+        wait_ms: int = 2000,
     ) -> list:
+        client = await resolver(ctx)
         width = max(320, min(1920, int(max_width)))
         wait = max(0, min(2000, int(wait_ms)))
         try:
@@ -157,7 +198,8 @@ def build_server(client: BrokerClient) -> MCPServer:
         )
         return [Image(data=jpeg, format="jpeg"), TextContent(type="text", text=text)]
 
-    async def _run_action(action: dict) -> str:
+    async def _run_action(ctx: Context, action: dict) -> str:
+        client = await resolver(ctx)
         try:
             job = await client.command(action)
         except BridgeError as exc:
@@ -180,32 +222,37 @@ def build_server(client: BrokerClient) -> MCPServer:
             }
         )
 
-    async def press_key(code: str, modifiers: list[str] | None = None, hold_ms: int = 50) -> str:
+    async def press_key(
+        ctx: Context, code: str, modifiers: list[str] | None = None, hold_ms: int = 50
+    ) -> str:
         return await _run_action(
+            ctx,
             {
                 "kind": "press_key",
                 "code": code,
                 "modifiers": modifiers or [],
                 "hold_ms": max(10, min(1000, int(hold_ms))),
-            }
+            },
         )
 
-    async def type_text(text: str, char_interval_ms: int = 15) -> str:
+    async def type_text(ctx: Context, text: str, char_interval_ms: int = 15) -> str:
         return await _run_action(
+            ctx,
             {
                 "kind": "type_text",
                 "text": text,
                 "char_interval_ms": max(10, min(50, int(char_interval_ms))),
-            }
+            },
         )
 
-    async def mouse_move(basis_id: str, x: float, y: float) -> str:
-        return await _run_action({"kind": "mouse_move", "basis_id": basis_id, "x": x, "y": y})
+    async def mouse_move(ctx: Context, basis_id: str, x: float, y: float) -> str:
+        return await _run_action(ctx, {"kind": "mouse_move", "basis_id": basis_id, "x": x, "y": y})
 
     async def mouse_click(
-        basis_id: str, x: float, y: float, button: str = "left", count: int = 1
+        ctx: Context, basis_id: str, x: float, y: float, button: str = "left", count: int = 1
     ) -> str:
         return await _run_action(
+            ctx,
             {
                 "kind": "mouse_click",
                 "basis_id": basis_id,
@@ -213,10 +260,11 @@ def build_server(client: BrokerClient) -> MCPServer:
                 "y": y,
                 "button": button,
                 "count": count,
-            }
+            },
         )
 
     async def mouse_drag(
+        ctx: Context,
         basis_id: str,
         from_x: float,
         from_y: float,
@@ -226,6 +274,7 @@ def build_server(client: BrokerClient) -> MCPServer:
         duration_ms: int = 500,
     ) -> str:
         return await _run_action(
+            ctx,
             {
                 "kind": "mouse_drag",
                 "basis_id": basis_id,
@@ -235,42 +284,46 @@ def build_server(client: BrokerClient) -> MCPServer:
                 "to_y": to_y,
                 "button": button,
                 "duration_ms": max(50, min(5000, int(duration_ms))),
-            }
+            },
         )
 
-    async def mouse_scroll(basis_id: str, x: float, y: float, steps: int) -> str:
+    async def mouse_scroll(ctx: Context, basis_id: str, x: float, y: float, steps: int) -> str:
         if steps == 0:
             raise ToolError("INPUT_LIMIT: steps must be a non-zero value in -127..127")
         return await _run_action(
-            {"kind": "mouse_scroll", "basis_id": basis_id, "x": x, "y": y, "steps": steps}
+            ctx, {"kind": "mouse_scroll", "basis_id": basis_id, "x": x, "y": y, "steps": steps}
         )
 
-    async def release_inputs() -> str:
-        return await _run_action({"kind": "release_inputs"})
+    async def release_inputs(ctx: Context) -> str:
+        return await _run_action(ctx, {"kind": "release_inputs"})
 
-    async def mouse_move_relative(dx: int, dy: int) -> str:
-        return await _run_action({"kind": "mouse_move_relative", "dx": dx, "dy": dy})
+    async def mouse_move_relative(ctx: Context, dx: int, dy: int) -> str:
+        return await _run_action(ctx, {"kind": "mouse_move_relative", "dx": dx, "dy": dy})
 
-    async def mouse_click_relative(button: str = "left", count: int = 1) -> str:
-        return await _run_action({"kind": "mouse_click_relative", "button": button, "count": count})
+    async def mouse_click_relative(ctx: Context, button: str = "left", count: int = 1) -> str:
+        return await _run_action(
+            ctx, {"kind": "mouse_click_relative", "button": button, "count": count}
+        )
 
     async def mouse_drag_relative(
-        dx: int, dy: int, button: str = "left", duration_ms: int = 500
+        ctx: Context, dx: int, dy: int, button: str = "left", duration_ms: int = 500
     ) -> str:
         return await _run_action(
+            ctx,
             {
                 "kind": "mouse_drag_relative",
                 "dx": dx,
                 "dy": dy,
                 "button": button,
                 "duration_ms": duration_ms,
-            }
+            },
         )
 
-    async def mouse_scroll_relative(steps: int) -> str:
-        return await _run_action({"kind": "mouse_scroll_relative", "steps": steps})
+    async def mouse_scroll_relative(ctx: Context, steps: int) -> str:
+        return await _run_action(ctx, {"kind": "mouse_scroll_relative", "steps": steps})
 
-    async def cancel_action(job_id: str) -> str:
+    async def cancel_action(ctx: Context, job_id: str) -> str:
+        client = await resolver(ctx)
         try:
             job = await client.cancel(job_id)
         except BridgeError as exc:
@@ -299,7 +352,14 @@ def build_server(client: BrokerClient) -> MCPServer:
         server.add_tool(fn, name=name, description=TOOL_DESCRIPTIONS[name])
 
     async def read_state() -> str:
-        return json.dumps(await client.get_status(), ensure_ascii=False)
+        if state_provider is not None:
+            return json.dumps(state_provider(), ensure_ascii=False)
+        if fixed_client is None:
+            # Resolver-mode servers must wire a state provider: the locked
+            # SDK reads resources without request context (no session to
+            # resolve a client from).
+            raise RuntimeError("superuse://state needs a state_provider on HTTP servers")
+        return json.dumps(await fixed_client.get_status(), ensure_ascii=False)
 
     from mcp.server.mcpserver.resources.types import FunctionResource
 

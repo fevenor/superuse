@@ -50,7 +50,7 @@ def test_initialize_keeps_existing_config_and_overrides_are_independent(tmp_path
     resolved = paths.resolve_paths(app_dir=tmp_path)
     resolved.initialize()
     config = tmp_path / "data/config.toml"
-    assert 'mode = "simulated"' in config.read_text()
+    assert 'mode = "real"' in config.read_text()
     custom = "schema_version = 1\n[video]\npublish_fps = 7\n"
     config.write_text(custom)
     resolved.initialize()
@@ -168,7 +168,9 @@ def test_serve_reads_portable_config_from_base_not_cwd(tmp_path, monkeypatch):
     (base / "data/config.toml").write_text("schema_version=1\n[video]\npublish_fps=7\n")
     monkeypatch.setattr(paths, "application_dir", lambda: base)
     monkeypatch.chdir(tmp_path)
-    args = argparse.Namespace(config=None, runtime_dir=None, real=False, headless=True)
+    args = argparse.Namespace(
+        config=None, runtime_dir=None, real=False, simulated=False, headless=True
+    )
     app = ServeApp(args)
     assert app.config.section("video")["publish_fps"] == 7
     assert app.runtime_dir == base / "data/runtime"
@@ -191,7 +193,9 @@ def test_failed_broker_start_is_reported_and_partial_resources_are_closed(tmp_pa
 
     monkeypatch.setattr(serve, "Broker", FailedBroker)
     app = serve.ServeApp(
-        argparse.Namespace(config=None, runtime_dir=str(tmp_path), real=False, headless=True)
+        argparse.Namespace(
+            config=None, runtime_dir=str(tmp_path), real=False, simulated=False, headless=True
+        )
     )
     try:
         with pytest.raises(SystemExit, match="broker failed to start"):
@@ -223,6 +227,13 @@ def test_release_preserves_empty_data_directory_without_user_state(tmp_path):
     build.write_zip(stage, output)
     with zipfile.ZipFile(output) as archive:
         assert "Superuse/data/" in archive.namelist()
+        for name in (
+            "PORTABLE.md",
+            "MCP.md",
+            "mcp-client.example.json",
+            "mcp-client-http.example.json",
+        ):
+            assert f"Superuse/{name}" in archive.namelist()
         assert not any(
             name.startswith("Superuse/data/") and name != "Superuse/data/"
             for name in archive.namelist()

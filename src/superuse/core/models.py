@@ -116,9 +116,14 @@ class State:
     serial_status: DeviceStatus
     video_status: DeviceStatus
     frame_age_ms: float | None
+    # Human-readable reason a device is not ready (no match, ambiguous
+    # identity, open failure). Emitted only when present so the v1 wire
+    # contract stays valid for healthy devices (task 2026-10-17 T2).
+    serial_detail: str | None = None
+    video_detail: str | None = None
 
     def to_wire(self) -> dict:
-        return {
+        wire = {
             "api_version": API_VERSION,
             "instance_id": self.instance_id,
             "state_revision": self.state_revision,
@@ -131,6 +136,11 @@ class State:
             "video_status": self.video_status.value,
             "frame_age_ms": self.frame_age_ms,
         }
+        if self.serial_detail is not None:
+            wire["serial_detail"] = self.serial_detail
+        if self.video_detail is not None:
+            wire["video_detail"] = self.video_detail
+        return wire
 
 
 @dataclass(frozen=True)

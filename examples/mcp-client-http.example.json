@@ -1,0 +1,12 @@
+{
+  "_comment": "Streamable HTTP MCP example (task 2026-10-17). The URL points at the broker's HTTP MCP listener; lan_host:18766 for LAN agents or 127.0.0.1:18766 locally. The shared key configured in config.toml [network] goes into the Authorization header verbatim (UTF-8 bytes; quotes only if your agent config requires them). Every HTTP client session gets its own independent control session — two agents may share one key and still contend for control through the normal lease rules.",
+  "mcpServers": {
+    "superuse-http": {
+      "type": "http",
+      "url": "http://127.0.0.1:18766/mcp",
+      "headers": {
+        "Authorization": "Bearer REPLACE_WITH_NETWORK_KEY"
+      }
+    }
+  }
+}

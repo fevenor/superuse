@@ -49,6 +49,11 @@ class TrayApp:
         on_quit: Callable[[], None],
         get_state_summary: Callable[[], str],
         icon_path: str | None = None,
+        on_rescan_devices: Callable[[], None] | None = None,
+        on_set_lan: Callable[[bool], object] | None = None,
+        lan_enabled: Callable[[], bool] | None = None,
+        lan_toggle_available: Callable[[], bool] | None = None,
+        lan_address_text: Callable[[], str] | None = None,
     ) -> None:
         self._loop = loop
         self._on_open_ui = on_open_ui
@@ -58,6 +63,11 @@ class TrayApp:
         self._on_quit = on_quit
         self._get_state_summary = get_state_summary
         self._icon_path = icon_path
+        self._on_rescan_devices = on_rescan_devices
+        self._on_set_lan = on_set_lan
+        self._lan_enabled = lan_enabled or (lambda: False)
+        self._lan_toggle_available = lan_toggle_available or (lambda: False)
+        self._lan_address_text = lan_address_text or (lambda: "")
         self._icon = None
 
     # -- thread-safe dispatch ---------------------------------------------
@@ -90,6 +100,22 @@ class TrayApp:
     def handback_clicked(self, _, __) -> None:
         self._dispatch(self._on_handback)
 
+    def rescan_clicked(self, _, __) -> None:
+        if self._on_rescan_devices is not None:
+            self._dispatch(self._on_rescan_devices)
+
+    def lan_toggled(self, item) -> None:
+        if self._on_set_lan is None:
+            return
+        # The checkbox state is read from the broker, not from the menu item:
+        # a failed transaction must not leave a checked-but-off menu.
+        target = not self._lan_enabled()
+        self._dispatch(self._on_set_lan, target)
+
+    def copy_lan_addresses_clicked(self, _, __) -> None:
+        text = self._lan_address_text()
+        self._dispatch(_copy_to_clipboard, text)
+
     def copy_diagnostics_clicked(self, _, __) -> None:
         text = self._on_copy_diagnostics()  # read-only snapshot; cheap
         self._dispatch(_copy_to_clipboard, text)
@@ -105,6 +131,16 @@ class TrayApp:
         return Menu(
             MenuItem("打开界面", self.open_ui_clicked, default=True),
             MenuItem(lambda text: self._get_state_summary(), None, enabled=False),
+            MenuItem("重新检测设备", self.rescan_clicked),
+            Menu.SEPARATOR,
+            MenuItem(
+                "允许局域网访问",
+                self.lan_toggled,
+                checked=lambda item: self._lan_enabled(),
+                enabled=lambda item: self._lan_toggle_available(),
+            ),
+            MenuItem("复制局域网地址", self.copy_lan_addresses_clicked),
+            Menu.SEPARATOR,
             MenuItem("接管并打开界面", self.takeover_clicked),
             MenuItem("交还给 agent", self.handback_clicked),
             MenuItem("复制脱敏诊断", self.copy_diagnostics_clicked),

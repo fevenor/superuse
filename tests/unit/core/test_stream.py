@@ -115,3 +115,21 @@ async def test_stream_events_from_non_owner_rejected(harness: Harness):
     assert acks[-1].status == "rejected"
     assert acks[-1].error["code"] == "CONTROL_REVOKED"
     assert h.input_writes(other.session_id) == []
+
+
+async def test_absolute_coalescing_never_replaces_the_report_being_written(harness: Harness):
+    h = harness
+    human = h.human()
+    lease = (await h.manager.takeover(human)).lease
+    acks = []
+    stream = h.scheduler.attach_stream(human, acks.append)
+    h.actor.set_gate(False)
+    stream.handle(mouse_event(1, lease, h.basis_id, x=10))
+    await settle()  # first report is waiting for the serial writer
+    stream.handle(mouse_event(2, lease, h.basis_id, x=100))
+    stream.handle(mouse_event(3, lease, h.basis_id, x=300))
+    h.actor.set_gate(True)
+    await settle()
+    terminal = [(ack.sequence, ack.status) for ack in acks]
+    assert terminal == [(2, "coalesced"), (1, "written"), (3, "written")]
+    assert len(h.input_writes(human.session_id)) == 2

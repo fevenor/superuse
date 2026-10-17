@@ -269,6 +269,16 @@
             "null"
           ],
           "minimum": 0
+        },
+        "serial_detail": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Why the serial device is not ready (no match, ambiguous, open failure)."
+        },
+        "video_detail": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Why the video device is not ready."
         }
       },
       "allOf": [
@@ -1558,6 +1568,39 @@
               "const": false
             }
           }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "web_port",
+            "mcp_port",
+            "lan_host"
+          ],
+          "properties": {
+            "key": {
+              "type": "string",
+              "maxLength": 256,
+              "description": "Shared trusted-LAN key for remote browsers and HTTP MCP; exact bytes, any non-empty string. Empty means network access not configured."
+            },
+            "web_port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "mcp_port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "lan_host": {
+              "type": "string",
+              "pattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$",
+              "description": "IPv4 address to bind the LAN listeners (0.0.0.0 = all interfaces)."
+            }
+          },
+          "description": "Trusted-LAN access (task 2026-10-17). web_port and mcp_port must differ (checked in scripts/check_design.py)."
         }
       }
     },

@@ -27,9 +27,19 @@ def main(argv: list[str] | None = None) -> int:
 
     # Kept in sync with superuse.serve.build_argparsers (duplicated inline so
     # parsing itself never imports aiohttp).
-    serve = sub.add_parser("serve", help="tray + broker; default simulated, --real for hardware")
+    serve = sub.add_parser(
+        "serve",
+        help="tray + broker; waits for the real device by default (simulated is dev-only)",
+    )
     serve.add_argument("--config", default=None)
-    serve.add_argument("--real", action="store_true")
+    serve.add_argument(
+        "--real", action="store_true", help="compatibility no-op: real devices are the default"
+    )
+    serve.add_argument(
+        "--simulated",
+        action="store_true",
+        help="development only: run simulated devices (rejected by release builds)",
+    )
     serve.add_argument("--headless", action="store_true", help="no tray; run until Ctrl+C (CI)")
     serve.add_argument("--runtime-dir", default=None)
     serve.set_defaults(which="serve")

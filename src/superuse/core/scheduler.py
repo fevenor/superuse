@@ -799,6 +799,7 @@ class HumanInputStream:
         self._acks: OrderedDict[int, InputAck] = OrderedDict()
         self._pending: deque[tuple[HumanInputEnvelope, bool]] = deque()  # (envelope, coalescible)
         self._worker: asyncio.Task | None = None
+        self._active_sequence: int | None = None
 
     # -- intake (from WS receive path; never blocks) ----------------------
 
@@ -839,7 +840,11 @@ class HumanInputStream:
         )
         if coalescible and self._pending:
             tail_envelope, tail_coalescible = self._pending[-1]
-            if tail_coalescible and isinstance(tail_envelope.action, MouseState):
+            if (
+                tail_coalescible
+                and tail_envelope.sequence != self._active_sequence
+                and isinstance(tail_envelope.action, MouseState)
+            ):
                 # Latest-value merge for buttonless moves (docs §5).
                 self._pending.pop()
                 self._remember(InputAck(tail_envelope.sequence, "coalesced"))
@@ -900,6 +905,7 @@ class HumanInputStream:
     async def _drain(self) -> None:
         while self._pending:
             envelope, _ = self._pending[0]
+            self._active_sequence = envelope.sequence
             try:
                 await self._execute(envelope)
             except asyncio.CancelledError:
@@ -917,6 +923,8 @@ class HumanInputStream:
                         ).to_wire(),
                     )
                 )
+            finally:
+                self._active_sequence = None
             self._pending.popleft()
 
     async def _execute(self, envelope: HumanInputEnvelope) -> None:

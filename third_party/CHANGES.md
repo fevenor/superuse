@@ -17,6 +17,12 @@ Portable 发布：补入 pySerial 3.5 的原始 BSD-3-Clause 文本，来源和 
 
 相对输入增量使用 0x05 有界动作与人工状态流；页面默认相对移动，首次捕获手势不转发，退出捕获/切换模式在有序流中中和而保留租约。位移按短窗口累加，状态按 revision/连接身份合并；预览采用最新帧解码和独立 1920 宽/quality 90 profile。这些是 Superuse 适配层的修改。
 
+人工输入增加终态 ACK 驱动的四报告发送窗口；等待串口期间累计相对位移并保留键鼠状态事件顺序，断连后丢弃未发送动作。暂停界面显示失焦、输入积压或租约失效的具体原因；绝对移动合并排除正在写入的报告。
+
+持续快速移动修复：16ms 采样、待发连续移动最多两条 HID 报告的向量压缩、50ms 移动过期和饱和反向响应；按钮变化独立保存，保持按键/滚轮顺序。参考 noVNC 的移动节流和 PiKVM 的移动合并设计，自主实现，未复制其源码；依据见 docs/development/input-flow-control.md。
+
+局域网 HTTP 兼容：请求 UUID 在浏览器没有 crypto.randomUUID 时使用 getRandomValues 生成，统一修复接管、交还、续租和快捷键四处调用；页面不要求 HTTPS。
+
 mcp-serial-hid-kvm @de48e74 仅作工具/图片返回参考，未直接导入旧 SDK 包装。`src/superuse/mcp/` 按本项目官方 SDK v2 契约实现鉴权、续租、取消与失权。
 
 厂商 demo 只作协议对照；闭源 WebApp 未复制。原 HID 字节格式不变，全局 release_all 语义改为 owner-scoped 释放与执行器 fence。

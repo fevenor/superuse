@@ -1,7 +1,10 @@
 schema_version = 1
 
 [device]
-mode = "simulated"
+# Real hardware is the default: the app waits for the SuperKVM device and
+# recovers when it is plugged in. "simulated" is a development/test-only
+# mode and is rejected by the packaged release builds.
+mode = "real"
 
 [device.serial]
 vid = 0x1209
@@ -25,6 +28,17 @@ autocrop = false
 [server]
 host = "127.0.0.1"
 port = 0
+
+[network]
+# Trusted-LAN access (task 2026-10-17). The key is shared by remote browsers
+# and HTTP MCP agents; any non-empty string works ("a", "123" included) and
+# is compared exactly as written — no trimming or case folding. Empty key =
+# network access stays off. Changes apply after a restart; the LAN switch
+# itself lives in the tray menu.
+key = ""
+web_port = 18765          # remote browser HTTP/WS
+mcp_port = 18766          # Streamable HTTP MCP at http://<host>:18766/mcp
+lan_host = "0.0.0.0"      # or one local IPv4 address to bind a single NIC
 
 [control]
 lease_ttl_ms = 15000

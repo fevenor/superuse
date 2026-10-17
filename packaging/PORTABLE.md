@@ -3,10 +3,18 @@
 解压整个 Superuse 目录，保留两个 EXE、_internal 和空的 data 目录。
 双击 Superuse.exe 启动托盘，从托盘打开浏览器界面。
 
+Agent 接入请先读 [MCP.md](MCP.md)：包含本机 stdio、Streamable HTTP、
+局域网 key 配置、工具调用顺序和故障处理。根目录的 mcp-client.example.json
+与 mcp-client-http.example.json 可作为宿主配置模板，先替换其中的路径、地址和 key。
+
 程序以 EXE 所在目录为基础：存在 data/ 就自动使用 portable 模式。
-首次启动在 data/config.toml 写入模拟配置，默认不连接真实硬件。
+首次启动在 data/config.toml 写入真实模式配置：程序等待 SuperKVM 设备接入，不打开其他硬件。
 配置字段见同目录 config.example.toml；停止程序后编辑 data/config.toml。
-要使用真实设备，将 device.mode 改为 real，并确认只选择预期的 SuperKVM。
+发布版始终使用真实设备，确认只选择预期的 SuperKVM；缺设备时提示连接并继续等待。
+
+人工相对鼠标采用移动采样和有界流控。严重过载时会压缩位移、淘汰过期移动，
+避免积压旧轨迹而暂停；键盘、按钮和滚轮事件保持顺序。真实失焦、断连或设备故障
+仍会暂停并保留人工优先，需点击“接管”继续或“交还”允许 agent。
 
 data/ 内保存 config.toml、logs/、state/ 和 runtime/。
 所在目录必须可写；写入失败会报错，不会改为使用 AppData。
@@ -22,7 +30,7 @@ data/ 内保存 config.toml、logs/、state/ 和 runtime/。
 不要把使用过的目录直接压缩公开；data/ 可能有设备标识、目标内容和运行凭据。
 
 MCP 宿主启动同目录 SuperuseMCP.exe，参数为 --client-label agent-a。
-首次启动仍为观看/模拟模式；真实输入及人工接管遵循应用的租约规则。
+首次启动即真实模式（无设备时为观看/等待状态）；真实输入及人工接管遵循应用的租约规则。
 
 没有 data/ 时使用常规模式：运行数据保存到当前用户的 AppData。
 --config 与 --runtime-dir 显式参数可覆盖各自路径，普通便携使用无需设置。

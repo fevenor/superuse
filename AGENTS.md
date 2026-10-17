@@ -9,13 +9,21 @@
 
 ## 设备与控制
 
-- 只有 broker 的设备模块持有真实串口/采集句柄；MCP、浏览器、托盘走同一控制管理器。
+- 只有 broker 的设备模块持有真实串口/采集句柄；MCP（stdio 与 HTTP）、浏览器（本机与局域网）、托盘走同一控制管理器，不创建第二份硬件句柄。
 - 每个报告在唯一串口执行器中核对 session、lease、instance、generation 和设备状态；排队前检查不能替代执行时检查。
 - 人工接管先取消旧动作、废止旧队列并完成释放屏障。旧 finally、失焦或断连清理不得释放新所有者的输入。
 - 人工保留不会因 agent 下一次调用自动交还；通知不保证唤醒空闲模型。
 - 不用控制端 SendInput 操作目标机，不默认打开任何摄像头/COM，不自动重放不确定的输入。
 - SuperKVM 无逐包输入 ACK；串口写成功不能标为目标 UI 成功。ASCII 接口不混入 Unicode、剪贴板、文件传输或固件操作。
-- 默认模拟，真实模式须显式启用并唯一匹配设备。缺设备、失权、停帧或配置错误明确失败，不回退为其他硬件/模拟成功。
+- 真实设备是默认模式：缺设备时程序常驻等待（托盘/页面/stdio 可用），接入后按稳定身份唯一匹配恢复。模拟只属于开发源码与测试 fixture（显式选择，frozen 发布构建拒绝并迁移旧配置）；缺设备、失权、停帧或配置错误明确失败，不回退为其他硬件/模拟成功。
+
+## 网络访问（可信局域网）
+
+- 远程浏览器（`lan_host:web_port`）与 Streamable HTTP MCP（`lan_host:mcp_port/mcp`）共用 `config.toml [network] key` 的单一密钥；明文 HTTP/WS，不做 HTTPS、证书、OAuth、账号或密钥强度规则。
+- 密钥只作准入：远程浏览器经 key 登录换取独立 cookie 身份；每个 HTTP MCP 传输会话（`Mcp-Session-Id`）绑定独立 BrokerClient。不得以 TCP 连接、源 IP、label 或共享 key 充当逻辑身份。
+- LAN 默认关闭，由托盘事务式开启（两个入口都绑定成功才算开启，失败回滚）；关闭先废止 network generation，再经控制管理器释放远程 owner，最后清理监听。旧 cookie/page token/租约不得复活。
+- 本机专有入口（bootstrap、`/v1/ui/launch`、agent 会话签发）不暴露给远程；远程来源由服务端监听上下文决定，不信任客户端自报或 X-Forwarded-*。
+- 日志、诊断、URL、runtime 公开字段与发布归档中不出现 key。
 
 ## 来源与隐私
 

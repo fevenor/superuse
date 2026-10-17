@@ -30,6 +30,12 @@
     "valid": true
   },
   {
+    "name": "state-device-waiting",
+    "definition": "State",
+    "valid": true,
+    "file": "state-device-waiting.json"
+  },
+  {
     "name": "control-grant",
     "definition": "ControlGrant",
     "file": "control-grant.json",

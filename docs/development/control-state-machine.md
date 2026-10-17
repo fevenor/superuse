@@ -81,7 +81,7 @@ lease 状态广播只包含 owner 描述、generation、mode、revision；会话
 - 新接管优先于排队输入；已完成部分保留计数，后续报告拒绝，结果标 cancelled/revoked。
 - `finally` 只请求“如果我仍是同一所有者则释放”。失权时不得再调用全局 release_all；fence 已承担跨所有者清理。
 - HTTP/MCP 取消尽力中止尚未执行部分，不承诺回滚已写入输入；取消后的中和同样遵循有效 owner 或 fence。
-- 相对动作以有界 HID 计数分包，每包继续校验 owner/generation 和视频；点击/拖动只释放本动作按下的按钮。相对 owner 的取消/释放不使用历史绝对坐标。人工相对位移不按最后坐标合并，溢出走 owner fence。
+- 相对动作以有界 HID 计数分包，每包继续校验 owner/generation 和视频；点击/拖动只释放本动作按下的按钮。相对 owner 的取消/释放不使用历史绝对坐标。服务端已接收的人工相对报告不静默丢弃，溢出走 owner fence；浏览器在分配 sequence 前可压缩、淘汰过载的纯移动，按钮/键盘/滚轮状态变化必须保留。
 - MCP 提交尚未返回 job_id 时取消，桥按本次提交捕获的原 lease 发起有界释放；已接受动作被撤销，尚未接受的迟到提交因旧 lease 被拒绝。此路径清空桥中的原 lease，需要重新观察与申请；迟到清理不能释放较新的租约或人工 owner，不重放输入以获取 job_id。
 - 一个 owner 最多一个有状态动作作业。低频快捷键/点击保持顺序；浏览器无按钮 mousemove 可合并最新值。按下、抬起、滚轮、控制事件不能随意丢弃。
 - 普通输入队列默认 128 项，溢出返回 INPUT_BACKPRESSURE。若按键释放无法入队，进入受控的 owner fence，不允许静默丢 keyup 留下粘键。

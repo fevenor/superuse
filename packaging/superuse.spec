@@ -27,7 +27,16 @@ COMMON = dict(
     pathex=[str(ROOT / "src")],
     binaries=[],
     datas=datas,
-    hiddenimports=["pystray._win32"],
+    hiddenimports=[
+        "pystray._win32",
+        # uvicorn selects loop/protocol/lifespan implementations dynamically;
+        # pin the asyncio/h11/standard trio used by the HTTP MCP service.
+        "uvicorn.loops.auto",
+        "uvicorn.loops.asyncio",
+        "uvicorn.protocols.http.auto",
+        "uvicorn.protocols.http.h11_impl",
+        "uvicorn.lifespan.on",
+    ],
     hookspath=[],
     runtime_hooks=[],
     excludes=["tkinter", "pytest", "ruff"],

@@ -73,6 +73,10 @@ def json_response(data, status: int = 200) -> web.Response:
 class Api:
     """Route table plus auth helpers bound to one broker instance."""
 
+    #: Cookie feeding WS/page auth on this entry; the LAN entry overrides
+    #: both the name and the identity lookup (task 2026-10-17 T5).
+    browser_cookie = BROWSER_COOKIE
+
     def __init__(
         self,
         *,
@@ -82,6 +86,7 @@ class Api:
         sessions: SessionRegistry,
         hub: FrameHub,
         web_dir: Path | None = None,
+        network=None,
     ) -> None:
         self.config = config
         self.manager = manager
@@ -89,6 +94,7 @@ class Api:
         self.sessions = sessions
         self.hub = hub
         self.web_dir = web_dir
+        self.network = network
         self.port = 0
 
     # ------------------------------------------------------------------
@@ -162,6 +168,10 @@ class Api:
         if request.headers.get("Authorization", "").startswith("Bearer "):
             return self.auth_agent(request)
         return self.auth_browser_page(request, require_csrf=require_csrf)
+
+    def ws_browser_identity(self, cookie_value: str | None):
+        """Identity used by the WS handshake (loopback browsers by default)."""
+        return self.sessions.browser_identity(cookie_value)
 
     @staticmethod
     def require_origin(request: web.Request) -> None:
@@ -300,6 +310,19 @@ class Api:
     async def get_state(self, request: web.Request) -> web.Response:
         self.auth_any(request)
         return json_response(self.manager.get_state().to_wire())
+
+    async def get_network_state(self, request: web.Request) -> web.Response:
+        """Key-free LAN state (task T3): never echoes or accepts the key."""
+        self.auth_any(request)
+        if self.network is None:  # pragma: no cover - always wired by the broker
+            return json_response({"enabled": False, "key_configured": False})
+        network = self.config.network
+        # No explicit addresses: while enabled, the broker's provider lists
+        # the real local IPv4s — never the 0.0.0.0 placeholder.
+        return json_response(
+            self.network.status_wire()
+            | {"web_port": network["web_port"], "mcp_port": network["mcp_port"]}
+        )
 
     async def get_status(self, request: web.Request) -> web.Response:
         self.auth_any(request)
@@ -499,6 +522,7 @@ class Api:
         app.router.add_post("/v1/session/heartbeat", self.session_heartbeat)
         app.router.add_delete("/v1/session", self.session_delete)
         app.router.add_get("/v1/state", self.get_state)
+        app.router.add_get("/v1/network", self.get_network_state)
         app.router.add_get("/v1/status", self.get_status)
         app.router.add_post("/v1/control/acquire", self.control_acquire)
         app.router.add_post("/v1/control/renew", self.control_renew)
