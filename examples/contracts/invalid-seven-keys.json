@@ -1,0 +1,13 @@
+{
+  "kind": "keyboard_state",
+  "keys": [
+    "KeyA",
+    "KeyB",
+    "KeyC",
+    "KeyD",
+    "KeyE",
+    "KeyF",
+    "KeyG"
+  ],
+  "modifiers": []
+}

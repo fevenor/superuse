@@ -1,0 +1,5 @@
+{
+  "type": "input_ack",
+  "sequence": 1,
+  "status": "written"
+}

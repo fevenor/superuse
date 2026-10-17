@@ -1,0 +1,1697 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:superuse:contracts:v1",
+  "title": "Superuse v1 shared contracts",
+  "$comment": "Validate a named $defs entry. Semantic role, ownership and device checks are additional requirements.",
+  "$defs": {
+    "Uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "RequestId": {
+      "$ref": "#/$defs/Uuid"
+    },
+    "SecretToken": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43,128}$"
+    },
+    "SessionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 80
+        }
+      }
+    },
+    "SessionGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_version",
+        "instance_id",
+        "session_id",
+        "session_token",
+        "heartbeat_interval_ms",
+        "expires_in_ms"
+      ],
+      "properties": {
+        "api_version": {
+          "const": 1
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "session_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "session_token": {
+          "$ref": "#/$defs/SecretToken"
+        },
+        "heartbeat_interval_ms": {
+          "const": 5000
+        },
+        "expires_in_ms": {
+          "const": 15000
+        }
+      }
+    },
+    "BrowserExchangeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bootstrap"
+      ],
+      "properties": {
+        "bootstrap": {
+          "$ref": "#/$defs/SecretToken"
+        }
+      }
+    },
+    "BrowserContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_version",
+        "instance_id",
+        "csrf_token"
+      ],
+      "properties": {
+        "api_version": {
+          "const": 1
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "csrf_token": {
+          "$ref": "#/$defs/SecretToken"
+        }
+      }
+    },
+    "PageGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_version",
+        "instance_id",
+        "session_id",
+        "page_token",
+        "heartbeat_interval_ms",
+        "expires_in_ms"
+      ],
+      "properties": {
+        "api_version": {
+          "const": 1
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "session_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "page_token": {
+          "$ref": "#/$defs/SecretToken"
+        },
+        "heartbeat_interval_ms": {
+          "const": 5000
+        },
+        "expires_in_ms": {
+          "const": 15000
+        }
+      }
+    },
+    "WebSocketAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "page_token",
+        "csrf"
+      ],
+      "properties": {
+        "type": {
+          "const": "authenticate"
+        },
+        "page_token": {
+          "$ref": "#/$defs/SecretToken"
+        },
+        "csrf": {
+          "$ref": "#/$defs/SecretToken"
+        }
+      }
+    },
+    "Lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "lease_id",
+        "generation"
+      ],
+      "properties": {
+        "instance_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "lease_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "Owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "session_id",
+        "label"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "agent",
+            "human"
+          ]
+        },
+        "session_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 80
+        }
+      }
+    },
+    "DeviceStatus": {
+      "enum": [
+        "disconnected",
+        "starting",
+        "ready",
+        "fault"
+      ]
+    },
+    "State": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_version",
+        "instance_id",
+        "state_revision",
+        "generation",
+        "mode",
+        "owner",
+        "human_latched",
+        "source",
+        "serial_status",
+        "video_status",
+        "frame_age_ms"
+      ],
+      "properties": {
+        "api_version": {
+          "const": 1
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "mode": {
+          "enum": [
+            "idle",
+            "agent",
+            "human",
+            "human_hold",
+            "transition",
+            "recovery",
+            "stopping"
+          ]
+        },
+        "owner": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Owner"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "human_latched": {
+          "type": "boolean"
+        },
+        "source": {
+          "enum": [
+            "real",
+            "simulated"
+          ]
+        },
+        "serial_status": {
+          "$ref": "#/$defs/DeviceStatus"
+        },
+        "video_status": {
+          "$ref": "#/$defs/DeviceStatus"
+        },
+        "frame_age_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "idle"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "owner": {
+                "type": "null"
+              },
+              "human_latched": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "agent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "owner": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/Owner"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "agent"
+                      }
+                    }
+                  }
+                ]
+              },
+              "human_latched": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "human"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "owner": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/Owner"
+                  },
+                  {
+                    "properties": {
+                      "kind": {
+                        "const": "human"
+                      }
+                    }
+                  }
+                ]
+              },
+              "human_latched": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "human_hold"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "owner": {
+                "type": "null"
+              },
+              "human_latched": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "transition",
+                  "recovery",
+                  "stopping"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "owner": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "StatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "capabilities"
+      ],
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/State"
+        },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "maxLength": 80
+          }
+        }
+      }
+    },
+    "Modifier": {
+      "enum": [
+        "left_ctrl",
+        "left_shift",
+        "left_alt",
+        "left_gui",
+        "right_ctrl",
+        "right_shift",
+        "right_alt",
+        "right_gui"
+      ]
+    },
+    "Modifiers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Modifier"
+      },
+      "uniqueItems": true,
+      "maxItems": 8
+    },
+    "Code": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9]{0,39}$"
+    },
+    "Coordinate": {
+      "type": "number",
+      "minimum": 0
+    },
+    "Button": {
+      "enum": [
+        "left",
+        "right",
+        "middle"
+      ]
+    },
+    "PressKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code"
+      ],
+      "properties": {
+        "kind": {
+          "const": "press_key"
+        },
+        "code": {
+          "$ref": "#/$defs/Code"
+        },
+        "modifiers": {
+          "$ref": "#/$defs/Modifiers"
+        },
+        "hold_ms": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 1000,
+          "default": 50
+        }
+      }
+    },
+    "TypeText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "text"
+      ],
+      "properties": {
+        "kind": {
+          "const": "type_text"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[\t\n\r -~]+$"
+        },
+        "char_interval_ms": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 50,
+          "default": 15
+        }
+      }
+    },
+    "MouseMove": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "basis_id",
+        "x",
+        "y"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mouse_move"
+        },
+        "basis_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "x": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "y": {
+          "$ref": "#/$defs/Coordinate"
+        }
+      }
+    },
+    "MouseClick": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "basis_id",
+        "x",
+        "y"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mouse_click"
+        },
+        "basis_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "x": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "y": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "button": {
+          "$ref": "#/$defs/Button"
+        },
+        "count": {
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ],
+          "default": 1
+        }
+      }
+    },
+    "MouseDrag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "basis_id",
+        "from_x",
+        "from_y",
+        "to_x",
+        "to_y"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mouse_drag"
+        },
+        "basis_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "from_x": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "from_y": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "to_x": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "to_y": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "button": {
+          "$ref": "#/$defs/Button"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 50,
+          "maximum": 5000,
+          "default": 500
+        }
+      }
+    },
+    "MouseScroll": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "basis_id",
+        "x",
+        "y",
+        "steps"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mouse_scroll"
+        },
+        "basis_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "x": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "y": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": -127,
+          "maximum": 127,
+          "not": {
+            "const": 0
+          }
+        }
+      }
+    },
+    "KeyboardState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "keys",
+        "modifiers"
+      ],
+      "properties": {
+        "kind": {
+          "const": "keyboard_state"
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Code"
+          },
+          "uniqueItems": true,
+          "maxItems": 6
+        },
+        "modifiers": {
+          "$ref": "#/$defs/Modifiers"
+        }
+      }
+    },
+    "MouseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "basis_id",
+        "x",
+        "y",
+        "buttons"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mouse_state"
+        },
+        "basis_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "x": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "y": {
+          "$ref": "#/$defs/Coordinate"
+        },
+        "buttons": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        }
+      }
+    },
+    "ReleaseInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "release_inputs"
+        }
+      }
+    },
+    "Action": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/PressKey"
+        },
+        {
+          "$ref": "#/$defs/TypeText"
+        },
+        {
+          "$ref": "#/$defs/MouseMove"
+        },
+        {
+          "$ref": "#/$defs/MouseClick"
+        },
+        {
+          "$ref": "#/$defs/MouseDrag"
+        },
+        {
+          "$ref": "#/$defs/MouseScroll"
+        },
+        {
+          "$ref": "#/$defs/KeyboardState"
+        },
+        {
+          "$ref": "#/$defs/MouseState"
+        },
+        {
+          "$ref": "#/$defs/ReleaseInputs"
+        },
+        {
+          "$ref": "#/$defs/MouseMoveRelative"
+        },
+        {
+          "$ref": "#/$defs/MouseClickRelative"
+        },
+        {
+          "$ref": "#/$defs/MouseDragRelative"
+        },
+        {
+          "$ref": "#/$defs/MouseScrollRelative"
+        },
+        {
+          "$ref": "#/$defs/MouseRelativeState"
+        }
+      ]
+    },
+    "CommandEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_version",
+        "request_id",
+        "lease",
+        "action"
+      ],
+      "properties": {
+        "api_version": {
+          "const": 1
+        },
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "lease": {
+          "$ref": "#/$defs/Lease"
+        },
+        "action": {
+          "$ref": "#/$defs/Action"
+        }
+      }
+    },
+    "HumanInputEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_version",
+        "sequence",
+        "lease",
+        "action"
+      ],
+      "properties": {
+        "api_version": {
+          "const": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "lease": {
+          "$ref": "#/$defs/Lease"
+        },
+        "action": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/KeyboardState"
+            },
+            {
+              "$ref": "#/$defs/MouseState"
+            },
+            {
+              "$ref": "#/$defs/MouseScroll"
+            },
+            {
+              "$ref": "#/$defs/MouseRelativeState"
+            }
+          ]
+        }
+      }
+    },
+    "InputAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "sequence",
+        "status"
+      ],
+      "properties": {
+        "type": {
+          "const": "input_ack"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "written",
+            "coalesced",
+            "rejected"
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "error"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "AcquireRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "ttl_ms": {
+          "type": "integer",
+          "minimum": 5000,
+          "maximum": 30000,
+          "default": 15000
+        }
+      }
+    },
+    "ControlRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        }
+      }
+    },
+    "LeaseRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "lease"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "lease": {
+          "$ref": "#/$defs/Lease"
+        }
+      }
+    },
+    "RenewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "lease"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "lease": {
+          "$ref": "#/$defs/Lease"
+        },
+        "ttl_ms": {
+          "type": "integer",
+          "minimum": 5000,
+          "maximum": 30000,
+          "default": 15000
+        }
+      }
+    },
+    "ControlGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lease",
+        "expires_in_ms",
+        "state"
+      ],
+      "properties": {
+        "lease": {
+          "$ref": "#/$defs/Lease"
+        },
+        "expires_in_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        }
+      }
+    },
+    "FrameMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_version",
+        "instance_id",
+        "frame_id",
+        "capture_generation",
+        "geometry_id",
+        "basis_id",
+        "source",
+        "image_width",
+        "image_height",
+        "native_width",
+        "native_height",
+        "captured_at",
+        "age_ms",
+        "mime_type"
+      ],
+      "properties": {
+        "api_version": {
+          "const": 1
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "frame_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "capture_generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "geometry_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "basis_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "source": {
+          "enum": [
+            "real",
+            "simulated"
+          ]
+        },
+        "image_width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "image_height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "native_width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "native_height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "captured_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "age_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "mime_type": {
+          "const": "image/jpeg"
+        }
+      }
+    },
+    "Snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metadata",
+        "data_base64"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/$defs/FrameMetadata"
+        },
+        "data_base64": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 22369624,
+          "contentEncoding": "base64"
+        }
+      }
+    },
+    "ErrorCode": {
+      "enum": [
+        "BROKER_UNAVAILABLE",
+        "AUTH_FAILED",
+        "CONTROL_REQUIRED",
+        "CONTROL_BUSY",
+        "HUMAN_CONTROL",
+        "CONTROL_REVOKED",
+        "LEASE_EXPIRED",
+        "INSTANCE_CHANGED",
+        "DEVICE_UNAVAILABLE",
+        "DEVICE_AMBIGUOUS",
+        "VIDEO_STALE",
+        "VIDEO_UNAVAILABLE",
+        "FRAME_TIMEOUT",
+        "STALE_BASIS",
+        "COORDINATE_OUT_OF_BOUNDS",
+        "INPUT_LIMIT",
+        "UNSUPPORTED_KEY",
+        "UNSUPPORTED_TEXT",
+        "INPUT_BACKPRESSURE",
+        "REQUEST_ID_CONFLICT",
+        "SEQUENCE_OUT_OF_ORDER",
+        "ACTION_CANCELLED",
+        "ACTION_TIMEOUT",
+        "SERIAL_WRITE_FAILED",
+        "RECOVERY_REQUIRED",
+        "RESULT_UNKNOWN",
+        "INVALID_REQUEST",
+        "FORBIDDEN",
+        "RATE_LIMITED",
+        "NOT_FOUND"
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ErrorEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error",
+        "request_id"
+      ],
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/Error"
+        },
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        }
+      }
+    },
+    "Job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "request_id",
+        "status",
+        "terminal",
+        "reports_written",
+        "steps_completed",
+        "partial"
+      ],
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "request_id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "running",
+            "written",
+            "cancelled",
+            "failed"
+          ]
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "reports_written": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "steps_completed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "completion": {
+          "const": "written"
+        },
+        "error": {
+          "$ref": "#/$defs/Error"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "accepted",
+                  "running"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "terminal": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "written",
+                  "cancelled",
+                  "failed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "terminal": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "written"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "completion"
+            ],
+            "properties": {
+              "partial": {
+                "const": false
+              }
+            },
+            "not": {
+              "required": [
+                "error"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "cancelled",
+                  "failed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "error"
+            ],
+            "not": {
+              "required": [
+                "completion"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "StateEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "instance_id",
+        "state_revision",
+        "reason",
+        "state"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        }
+      }
+    },
+    "JobEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "job"
+      ],
+      "properties": {
+        "type": {
+          "const": "job"
+        },
+        "job": {
+          "$ref": "#/$defs/Job"
+        }
+      }
+    },
+    "Config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "device",
+        "server",
+        "control",
+        "video",
+        "logging"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "device": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "serial",
+            "video"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "simulated",
+                "real"
+              ]
+            },
+            "serial": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "vid",
+                "pid",
+                "serial_number",
+                "baud",
+                "read_timeout_ms",
+                "write_timeout_ms"
+              ],
+              "properties": {
+                "vid": {
+                  "const": 4617
+                },
+                "pid": {
+                  "const": 1
+                },
+                "serial_number": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "baud": {
+                  "const": 2000000
+                },
+                "read_timeout_ms": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 250
+                },
+                "write_timeout_ms": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 250
+                }
+              }
+            },
+            "video": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "vid",
+                "pid",
+                "name",
+                "device_path",
+                "backend",
+                "width",
+                "height",
+                "requested_fps",
+                "autocrop"
+              ],
+              "properties": {
+                "vid": {
+                  "const": 13407
+                },
+                "pid": {
+                  "const": 8497
+                },
+                "name": {
+                  "const": "SK USB3 Video"
+                },
+                "device_path": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "backend": {
+                  "enum": [
+                    "dshow",
+                    "msmf"
+                  ]
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 320,
+                  "maximum": 3840
+                },
+                "height": {
+                  "type": "integer",
+                  "minimum": 200,
+                  "maximum": 2160
+                },
+                "requested_fps": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
+                },
+                "autocrop": {
+                  "const": false
+                }
+              }
+            }
+          }
+        },
+        "server": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "port"
+          ],
+          "properties": {
+            "host": {
+              "const": "127.0.0.1"
+            },
+            "port": {
+              "const": 0
+            }
+          }
+        },
+        "control": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lease_ttl_ms",
+            "renew_interval_ms",
+            "agent_idle_ms",
+            "input_queue_limit",
+            "action_timeout_ms",
+            "fence_timeout_ms"
+          ],
+          "properties": {
+            "lease_ttl_ms": {
+              "type": "integer",
+              "minimum": 5000,
+              "maximum": 30000
+            },
+            "renew_interval_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 5000
+            },
+            "agent_idle_ms": {
+              "type": "integer",
+              "minimum": 15000,
+              "maximum": 300000
+            },
+            "input_queue_limit": {
+              "type": "integer",
+              "minimum": 16,
+              "maximum": 512
+            },
+            "action_timeout_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 30000
+            },
+            "fence_timeout_ms": {
+              "type": "integer",
+              "minimum": 500,
+              "maximum": 2000
+            }
+          }
+        },
+        "video": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "publish_fps",
+            "jpeg_quality",
+            "snapshot_max_width",
+            "freshness_ms",
+            "stall_timeout_ms"
+          ],
+          "properties": {
+            "publish_fps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            },
+            "jpeg_quality": {
+              "type": "integer",
+              "minimum": 40,
+              "maximum": 95
+            },
+            "snapshot_max_width": {
+              "type": "integer",
+              "minimum": 320,
+              "maximum": 1920
+            },
+            "freshness_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 1000
+            },
+            "stall_timeout_ms": {
+              "type": "integer",
+              "minimum": 1500,
+              "maximum": 5000
+            }
+          }
+        },
+        "logging": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "level",
+            "max_bytes",
+            "backup_count",
+            "capture_enabled"
+          ],
+          "properties": {
+            "level": {
+              "enum": [
+                "DEBUG",
+                "INFO",
+                "WARNING",
+                "ERROR"
+              ]
+            },
+            "max_bytes": {
+              "type": "integer",
+              "minimum": 1048576,
+              "maximum": 10485760
+            },
+            "backup_count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "capture_enabled": {
+              "const": false
+            }
+          }
+        }
+      }
+    },
+    "MouseMoveRelative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "dx",
+        "dy"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mouse_move_relative"
+        },
+        "dx": {
+          "type": "integer",
+          "minimum": -4096,
+          "maximum": 4096
+        },
+        "dy": {
+          "type": "integer",
+          "minimum": -4096,
+          "maximum": 4096
+        }
+      }
+    },
+    "MouseClickRelative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mouse_click_relative"
+        },
+        "button": {
+          "$ref": "#/$defs/Button"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2
+        }
+      }
+    },
+    "MouseDragRelative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "dx",
+        "dy"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mouse_drag_relative"
+        },
+        "dx": {
+          "type": "integer",
+          "minimum": -4096,
+          "maximum": 4096
+        },
+        "dy": {
+          "type": "integer",
+          "minimum": -4096,
+          "maximum": 4096
+        },
+        "button": {
+          "$ref": "#/$defs/Button"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 50,
+          "maximum": 5000
+        }
+      }
+    },
+    "MouseScrollRelative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "steps"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mouse_scroll_relative"
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": -127,
+          "maximum": 127,
+          "not": {
+            "const": 0
+          }
+        }
+      }
+    },
+    "MouseRelativeState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "dx",
+        "dy",
+        "buttons"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mouse_relative_state"
+        },
+        "dx": {
+          "type": "integer",
+          "minimum": -127,
+          "maximum": 127
+        },
+        "dy": {
+          "type": "integer",
+          "minimum": -127,
+          "maximum": 127
+        },
+        "buttons": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "wheel": {
+          "type": "integer",
+          "minimum": -127,
+          "maximum": 127
+        }
+      }
+    }
+  }
+}

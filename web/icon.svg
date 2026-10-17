@@ -1,0 +1,10 @@
+<!-- adapted from upstream serial-hid-kvm _ICON_SVG (MIT) -->
+<!-- upstream: serial-hid-kvm _ICON_SVG, MIT -->
+\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<rect width="512" height="512" rx="64" fill="#16213e"/>
+<rect x="56" y="80" width="400" height="260" rx="16" fill="#0a0a1a" stroke="#0f3460" stroke-width="12"/>
+<rect x="200" y="360" width="112" height="24" rx="4" fill="#0f3460"/>
+<rect x="160" y="392" width="192" height="16" rx="8" fill="#0f3460"/>
+<text x="256" y="240" text-anchor="middle" font-family="system-ui,sans-serif" font-weight="bold" font-size="96" fill="#e0e0e0">KVM</text>
+</svg>

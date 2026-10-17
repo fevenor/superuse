@@ -1,0 +1,16 @@
+{
+  "api_version": 1,
+  "instance_id": "11111111-1111-4111-8111-111111111111",
+  "frame_id": 42,
+  "capture_generation": 1,
+  "geometry_id": "66666666-6666-4666-8666-666666666666",
+  "basis_id": "55555555-5555-4555-8555-555555555555",
+  "source": "simulated",
+  "image_width": 1280,
+  "image_height": 720,
+  "native_width": 1920,
+  "native_height": 1080,
+  "captured_at": "2026-10-16T13:00:00Z",
+  "age_ms": 80,
+  "mime_type": "image/jpeg"
+}

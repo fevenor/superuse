@@ -1,0 +1,55 @@
+# Python and local environments
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build output and local state
+build/
+dist/
+*.spec.local
+.env
+.env.*
+!.env.example
+runtime/
+logs/
+captures/
+artifacts/
+superuse.local.toml
+*.local.json
+*.local.toml
+*.local.yaml
+*.local.yml
+diagnostics/
+state/
+private/
+.private/
+third_party/upstream/
+*.log
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+id_rsa*
+id_ed25519*
+credentials*.json
+secrets*.json
+broker.json
+config.toml
+.ssh/
+.aws/
+.codex/
+*.dmp
+
+# Editors and Windows
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+
+# uv.lock is intentionally tracked. Do not ignore it.

@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-10-16",
+  "sources": [
+    {
+      "repo": "sunasaji/serial-hid-kvm",
+      "url": "https://github.com/sunasaji/serial-hid-kvm",
+      "commit": "06379026341fbed19510831be051e0af360a752b",
+      "root_tree": "05d2010be9be1f5f54778c1bd89b2aed4c2fd39a",
+      "license": "MIT",
+      "license_file": "licenses/serial-hid-kvm-MIT.txt",
+      "license_git_blob": "e582d65ce953342ee52e8745305893b0b533117d",
+      "reviewed_blobs": [
+        {
+          "path": "pyproject.toml",
+          "git_blob": "5d15cc8f4bc525040878dbb764f8749d48115007"
+        },
+        {
+          "path": "LICENSE.txt",
+          "git_blob": "e582d65ce953342ee52e8745305893b0b533117d"
+        },
+        {
+          "path": "README.md",
+          "git_blob": "5ab0b858c55eaa81a6d2ffc867c4849524d29c7b"
+        },
+        {
+          "path": "src/serial_hid_kvm/hid_protocol.py",
+          "git_blob": "314adff8ce19b1ea62662ae84645c180fd388276"
+        },
+        {
+          "path": "src/serial_hid_kvm/server.py",
+          "git_blob": "dc065e693c6138b365de8675471fac0c2580477a"
+        },
+        {
+          "path": "src/serial_hid_kvm/_web_viewer.py",
+          "git_blob": "a88bdeac3e79218f7324cbce6db103eba7c17b45"
+        },
+        {
+          "path": "src/serial_hid_kvm/_preview_viewer.py",
+          "git_blob": "4ce57c0201c851856cf0a0fa960d56ac9cc52c2f"
+        },
+        {
+          "path": "src/serial_hid_kvm/capture.py",
+          "git_blob": "031b383e0be37e85c56ad461518940b9bdd96efd"
+        },
+        {
+          "path": "src/serial_hid_kvm/serial_detect.py",
+          "git_blob": "e47f875416c24be2efb408e4eb299075c99f1032"
+        },
+        {
+          "path": "src/serial_hid_kvm/config.py",
+          "git_blob": "65d785bd1c1e57b9e739440b82319553fffd40be"
+        }
+      ],
+      "runtime_code_imported": false
+    },
+    {
+      "repo": "sunasaji/mcp-serial-hid-kvm",
+      "url": "https://github.com/sunasaji/mcp-serial-hid-kvm",
+      "commit": "de48e74cd417a64846ffe7623523cce117fb8f8e",
+      "root_tree": "dcd169e88950b6c3eec22bd9102873dffacd5728",
+      "license": "MIT",
+      "license_file": "licenses/mcp-serial-hid-kvm-MIT.txt",
+      "license_git_blob": "e582d65ce953342ee52e8745305893b0b533117d",
+      "reviewed_blobs": [
+        {
+          "path": "README.md",
+          "git_blob": "537957b2e6922073b10eb341be7b053758781f03"
+        },
+        {
+          "path": "LICENSE.txt",
+          "git_blob": "e582d65ce953342ee52e8745305893b0b533117d"
+        },
+        {
+          "path": "pyproject.toml",
+          "git_blob": "8f72600544e8ad7a9576c2c9eb799335856d7700"
+        },
+        {
+          "path": "src/mcp_serial_hid_kvm/server.py",
+          "git_blob": "65144ae905893dea9eee41f7b0798ca31496c044"
+        }
+      ],
+      "runtime_code_imported": false
+    }
+  ]
+}

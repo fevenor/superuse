@@ -1,0 +1,14 @@
+{
+  "api_version": 1,
+  "request_id": "22222222-2222-4222-8222-222222222222",
+  "lease": {
+    "instance_id": "11111111-1111-4111-8111-111111111111",
+    "lease_id": "44444444-4444-4444-8444-444444444444",
+    "generation": 7
+  },
+  "action": {
+    "kind": "type_text",
+    "text": "Superuse test / ? {enter}\n",
+    "char_interval_ms": 15
+  }
+}

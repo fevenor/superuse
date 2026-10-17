@@ -1,0 +1,290 @@
+[
+  {
+    "name": "state-agent",
+    "definition": "State",
+    "file": "state-agent.json",
+    "valid": true
+  },
+  {
+    "name": "state-idle",
+    "definition": "State",
+    "file": "state-idle.json",
+    "valid": true
+  },
+  {
+    "name": "state-human",
+    "definition": "State",
+    "file": "state-human.json",
+    "valid": true
+  },
+  {
+    "name": "state-human_hold",
+    "definition": "State",
+    "file": "state-human_hold.json",
+    "valid": true
+  },
+  {
+    "name": "state-recovery",
+    "definition": "State",
+    "file": "state-recovery.json",
+    "valid": true
+  },
+  {
+    "name": "control-grant",
+    "definition": "ControlGrant",
+    "file": "control-grant.json",
+    "valid": true
+  },
+  {
+    "name": "acquire",
+    "definition": "AcquireRequest",
+    "file": "acquire.json",
+    "valid": true
+  },
+  {
+    "name": "command-press_key",
+    "definition": "CommandEnvelope",
+    "file": "command-press_key.json",
+    "valid": true
+  },
+  {
+    "name": "command-type_text",
+    "definition": "CommandEnvelope",
+    "file": "command-type_text.json",
+    "valid": true
+  },
+  {
+    "name": "command-mouse_move",
+    "definition": "CommandEnvelope",
+    "file": "command-mouse_move.json",
+    "valid": true
+  },
+  {
+    "name": "command-mouse_click",
+    "definition": "CommandEnvelope",
+    "file": "command-mouse_click.json",
+    "valid": true
+  },
+  {
+    "name": "command-mouse_drag",
+    "definition": "CommandEnvelope",
+    "file": "command-mouse_drag.json",
+    "valid": true
+  },
+  {
+    "name": "command-mouse_scroll",
+    "definition": "CommandEnvelope",
+    "file": "command-mouse_scroll.json",
+    "valid": true
+  },
+  {
+    "name": "command-keyboard_state",
+    "definition": "CommandEnvelope",
+    "file": "command-keyboard_state.json",
+    "valid": true
+  },
+  {
+    "name": "command-mouse_state",
+    "definition": "CommandEnvelope",
+    "file": "command-mouse_state.json",
+    "valid": true
+  },
+  {
+    "name": "command-release_inputs",
+    "definition": "CommandEnvelope",
+    "file": "command-release_inputs.json",
+    "valid": true
+  },
+  {
+    "name": "frame-metadata",
+    "definition": "FrameMetadata",
+    "file": "frame-metadata.json",
+    "valid": true
+  },
+  {
+    "name": "control-revoked",
+    "definition": "ErrorEnvelope",
+    "file": "control-revoked.json",
+    "valid": true
+  },
+  {
+    "name": "job-written",
+    "definition": "Job",
+    "file": "job-written.json",
+    "valid": true
+  },
+  {
+    "name": "job-revoked",
+    "definition": "Job",
+    "file": "job-revoked.json",
+    "valid": true
+  },
+  {
+    "name": "state-event",
+    "definition": "StateEvent",
+    "file": "state-event.json",
+    "valid": true
+  },
+  {
+    "name": "invalid-agent-no-owner",
+    "definition": "State",
+    "file": "invalid-agent-no-owner.json",
+    "valid": false
+  },
+  {
+    "name": "invalid-hold-with-owner",
+    "definition": "State",
+    "file": "invalid-hold-with-owner.json",
+    "valid": false
+  },
+  {
+    "name": "invalid-idle-latched",
+    "definition": "State",
+    "file": "invalid-idle-latched.json",
+    "valid": false
+  },
+  {
+    "name": "invalid-role-claim",
+    "definition": "CommandEnvelope",
+    "file": "invalid-role-claim.json",
+    "valid": false
+  },
+  {
+    "name": "invalid-unicode-text",
+    "definition": "Action",
+    "file": "invalid-unicode-text.json",
+    "valid": false
+  },
+  {
+    "name": "invalid-negative-coordinate",
+    "definition": "Action",
+    "file": "invalid-negative-coordinate.json",
+    "valid": false
+  },
+  {
+    "name": "invalid-zero-scroll",
+    "definition": "Action",
+    "file": "invalid-zero-scroll.json",
+    "valid": false
+  },
+  {
+    "name": "invalid-seven-keys",
+    "definition": "Action",
+    "file": "invalid-seven-keys.json",
+    "valid": false
+  },
+  {
+    "name": "invalid-terminal-job",
+    "definition": "Job",
+    "file": "invalid-terminal-job.json",
+    "valid": false
+  },
+  {
+    "name": "invalid-lease-id",
+    "definition": "Lease",
+    "file": "invalid-lease-id.json",
+    "valid": false
+  },
+  {
+    "name": "human-keyboard-stream",
+    "definition": "HumanInputEnvelope",
+    "file": "human-keyboard-stream.json",
+    "valid": true
+  },
+  {
+    "name": "human-input-written",
+    "definition": "InputAck",
+    "file": "human-input-written.json",
+    "valid": true
+  },
+  {
+    "name": "invalid-input-rejection-no-error",
+    "definition": "InputAck",
+    "file": "invalid-input-rejection-no-error.json",
+    "valid": false
+  },
+  {
+    "name": "agent-session-request",
+    "definition": "SessionRequest",
+    "file": "agent-session-request.json",
+    "valid": true
+  },
+  {
+    "name": "agent-session-grant",
+    "definition": "SessionGrant",
+    "file": "agent-session-grant.json",
+    "valid": true
+  },
+  {
+    "name": "invalid-session-role",
+    "definition": "SessionRequest",
+    "file": "invalid-session-role.json",
+    "valid": false
+  },
+  {
+    "name": "status-response",
+    "definition": "StatusResponse",
+    "file": "status-response.json",
+    "valid": true
+  },
+  {
+    "name": "relative_move",
+    "file": "relative_move.json",
+    "definition": "Action",
+    "valid": true
+  },
+  {
+    "name": "relative_click",
+    "file": "relative_click.json",
+    "definition": "Action",
+    "valid": true
+  },
+  {
+    "name": "relative_drag",
+    "file": "relative_drag.json",
+    "definition": "Action",
+    "valid": true
+  },
+  {
+    "name": "relative_scroll",
+    "file": "relative_scroll.json",
+    "definition": "Action",
+    "valid": true
+  },
+  {
+    "name": "relative_state",
+    "file": "relative_state.json",
+    "definition": "Action",
+    "valid": true
+  },
+  {
+    "name": "relative_move_fraction",
+    "file": "relative_move_fraction.json",
+    "definition": "Action",
+    "valid": false
+  },
+  {
+    "name": "relative_move_large",
+    "file": "relative_move_large.json",
+    "definition": "Action",
+    "valid": false
+  },
+  {
+    "name": "relative_move_pixels",
+    "file": "relative_move_pixels.json",
+    "definition": "Action",
+    "valid": false
+  },
+  {
+    "name": "relative_state_large",
+    "file": "relative_state_large.json",
+    "definition": "Action",
+    "valid": false
+  },
+  {
+    "name": "relative_scroll_zero",
+    "file": "relative_scroll_zero.json",
+    "definition": "Action",
+    "valid": false
+  }
+]

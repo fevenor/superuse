@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "superuse": {
+      "command": "C:\\REPLACE_WITH_INSTALL_DIRECTORY\\SuperuseMCP.exe",
+      "args": ["--client-label", "agent-a"]
+    }
+  }
+}

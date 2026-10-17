@@ -1,0 +1,81 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "superuse"
+version = "0.1.0.dev0"
+description = "Windows SuperKVM application with a shared human interface and MCP control"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = {file = "LICENSE"}
+dependencies = []
+
+# Keep version/help usable without application dependencies.
+# uv.lock fixes optional application and packaging dependencies.
+[project.optional-dependencies]
+app = [
+    "aiohttp>=3.14.5,<4",
+    "mcp>=2.3,<3",
+    "pyserial==3.5",
+    "opencv-python-headless==5.0.0.93",
+    "cv2-enumerate-cameras==1.4.0",
+    "pillow>=12.3,<13",
+    "pystray==0.19.5",
+    "pywin32>=308,<400; sys_platform == 'win32'",
+]
+packaging = ["pyinstaller>=6.22,<7"]
+
+[project.scripts]
+superuse = "superuse.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<10",
+    "pytest-asyncio>=1,<2",
+    "jsonschema>=4.23,<5",
+    "ruff>=0.14,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/superuse"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"web" = "superuse/web"
+"NOTICE.md" = "superuse/NOTICE.md"
+"third_party/licenses" = "superuse/third_party/licenses"
+"third_party/CHANGES.md" = "superuse/third_party/CHANGES.md"
+"third_party/upstream-lock.json" = "superuse/third_party/upstream-lock.json"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src", "/web", "/tests", "/scripts", "/packaging", "/docs", "/schemas", "/examples",
+    "/third_party/licenses", "/third_party/upstream-lock.json", "/third_party/CHANGES.md",
+    "/README.md", "/DESIGN.md", "/AGENTS.md", "/CONTRIBUTING.md", "/SECURITY.md",
+    "/NOTICE.md", "/LICENSE", "/config.example.toml", "/pyproject.toml", "/uv.lock",
+    "/.python-version",
+]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# Upstream snapshots under third_party/upstream stay byte-identical to the pinned commits; never lint or format them.
+exclude = ["third_party/upstream"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "hardware: explicitly selected tests that can operate the physical target",
+    "windows: tests requiring Windows APIs",
+]
+# Real hardware must never be selected by the default test command.
+addopts = "-m 'not hardware' --strict-markers"

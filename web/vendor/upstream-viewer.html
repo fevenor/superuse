@@ -1,0 +1,397 @@
+<!--
+  Upstream source: sunasaji/serial-hid-kvm @ 06379026341fbed19510831be051e0af360a752b
+  File: src/serial_hid_kvm/_web_viewer.py (_VIEWER_HTML), MIT license.
+  Extracted verbatim by T01 import; adapted page lives in web/app.js + web/index.html (T05).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#16213e">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<title>serial-hid-kvm</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#1a1a2e;font-family:system-ui,sans-serif;color:#e0e0e0}
+#toolbar{display:flex;align-items:center;gap:8px;padding:4px 12px;background:#16213e;height:36px;user-select:none}
+#toolbar button{background:#0f3460;border:1px solid #1a1a5e;color:#e0e0e0;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:13px}
+#toolbar button:hover{background:#1a4a8a}
+#toolbar button:active{background:#0a2a50}
+#status{margin-left:auto;font-size:12px;color:#8888aa}
+#fps{font-size:12px;color:#8888aa;min-width:70px;text-align:right}
+#container{display:flex;align-items:center;justify-content:center;width:100%;height:calc(100% - 36px);background:#0a0a1a;overflow:auto}
+canvas{display:block;image-rendering:auto;cursor:none}
+#toolbar button.active{background:#2a6a2a;border-color:#3a8a3a}
+body.fs-autohide #toolbar{position:fixed;top:0;z-index:10;transform:translateY(-100%);transition:transform .3s ease;pointer-events:none;border-radius:0 0 8px 8px;box-shadow:0 2px 12px rgba(0,0,0,.5);cursor:grab}
+body.fs-autohide #toolbar.visible{transform:translateY(0);pointer-events:auto}
+body.fs-autohide #toolbar.dragging{cursor:grabbing;transition:none}
+body.fs-autohide #container{height:100%}
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <button id="btnCad" title="Send Ctrl+Alt+Delete to target">Ctrl+Alt+Del</button>
+  <button id="btnAltTab" title="Send Alt+Tab to target">Alt+Tab</button>
+  <button id="btnViewOnly" title="Toggle view-only mode (no input sent)">View Only</button>
+  <button id="btnAudio" title="Toggle audio playback" style="display:none">&#x1f507; Audio</button>
+  <button id="btnCursor" title="Toggle local cursor visibility">Cursor</button>
+  <button id="btnScale" title="Toggle 1:1 / Fit scaling">1:1</button>
+  <button id="btnFs" title="Toggle fullscreen">Fullscreen</button>
+  <span id="status">Connecting…</span>
+  <span id="fps"></span>
+</div>
+<div id="container"><canvas id="screen"></canvas></div>
+<script>
+"use strict";
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d");
+const statusEl = document.getElementById("status");
+const fpsEl = document.getElementById("fps");
+const container = document.getElementById("container");
+const toolbar = document.getElementById("toolbar");
+
+let ws = null;
+let frameCount = 0;
+let lastFpsTime = performance.now();
+
+// --- WebSocket ---
+function connect() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(proto + "//" + location.host + "/ws");
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => { statusEl.textContent = "Connected"; };
+  ws.onclose = () => {
+    statusEl.textContent = "Disconnected — reconnecting…";
+    setTimeout(connect, 2000);
+  };
+  ws.onerror = () => { ws.close(); };
+  ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) {
+      const view = new Uint8Array(ev.data);
+      const type = view[0];
+      const payload = ev.data.slice(1);
+      if (type === 1) {
+        // Video frame (JPEG)
+        const blob = new Blob([payload], {type: "image/jpeg"});
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          if (canvas.width !== img.width || canvas.height !== img.height) {
+            canvas.width = img.width;
+            canvas.height = img.height;
+            updateCanvasSize();
+          }
+          ctx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+          frameCount++;
+        };
+        img.src = url;
+      } else if (type === 2) {
+        // Audio chunk (PCM int16 LE)
+        feedAudio(payload);
+      }
+    } else {
+      // Text message (JSON)
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "audio_config") { setupAudioConfig(msg); }
+      } catch(e) {}
+    }
+  };
+}
+
+// --- FPS counter ---
+setInterval(() => {
+  const now = performance.now();
+  const elapsed = (now - lastFpsTime) / 1000;
+  fpsEl.textContent = (frameCount / elapsed).toFixed(1) + " fps";
+  frameCount = 0;
+  lastFpsTime = now;
+}, 2000);
+
+// --- Canvas sizing ---
+let scaleMode = "native";  // "native" = 1:1 pixel, "fit" = fit to window
+
+function updateCanvasSize() {
+  if (canvas.width === 0 || canvas.height === 0) return;
+  if (scaleMode === "fit") {
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    const ar = canvas.width / canvas.height;
+    let dw, dh;
+    if (cw / ch > ar) { dh = ch; dw = ch * ar; }
+    else { dw = cw; dh = cw / ar; }
+    canvas.style.width = dw + "px";
+    canvas.style.height = dh + "px";
+  } else {
+    canvas.style.width = canvas.width + "px";
+    canvas.style.height = canvas.height + "px";
+  }
+}
+window.addEventListener("resize", updateCanvasSize);
+
+// --- Mouse coordinate normalisation (0-4095) ---
+function mouseCoords(e) {
+  const rect = canvas.getBoundingClientRect();
+  const sx = canvas.width / rect.width;
+  const sy = canvas.height / rect.height;
+  const cx = (e.clientX - rect.left) * sx;
+  const cy = (e.clientY - rect.top) * sy;
+  const x = Math.max(0, Math.min(4095, Math.round(cx * 4096 / canvas.width)));
+  const y = Math.max(0, Math.min(4095, Math.round(cy * 4096 / canvas.height)));
+  return {x, y};
+}
+
+let viewOnly = false;
+let showCursor = false;
+
+function send(obj) {
+  if (viewOnly) return;
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+// --- Mouse events ---
+let lastMouseSend = 0;
+canvas.addEventListener("mousemove", (e) => {
+  const now = performance.now();
+  if (now - lastMouseSend < 16) return;  // throttle ~60Hz
+  lastMouseSend = now;
+  const {x, y} = mouseCoords(e);
+  send({type:"mousemove", x, y, buttons: e.buttons});
+});
+canvas.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  canvas.focus();
+  const {x, y} = mouseCoords(e);
+  send({type:"mousedown", x, y, buttons: e.buttons});
+});
+canvas.addEventListener("mouseup", (e) => {
+  e.preventDefault();
+  const {x, y} = mouseCoords(e);
+  send({type:"mouseup", x, y, buttons: e.buttons});
+});
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const dy = e.deltaY > 0 ? -3 : 3;
+  send({type:"scroll", deltaY: dy});
+}, {passive: false});
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// --- Keyboard events ---
+canvas.setAttribute("tabindex", "0");
+canvas.addEventListener("keydown", (e) => {
+  if (viewOnly) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.repeat) return;
+  send({type:"keydown", code: e.code});
+});
+canvas.addEventListener("keyup", (e) => {
+  if (viewOnly) return;
+  e.preventDefault();
+  e.stopPropagation();
+  send({type:"keyup", code: e.code});
+});
+canvas.addEventListener("blur", () => { send({type:"release_all"}); });
+
+// --- Toolbar ---
+document.getElementById("btnCad").addEventListener("click", () => {
+  send({type:"keydown", code:"ControlLeft"});
+  send({type:"keydown", code:"AltLeft"});
+  send({type:"keydown", code:"Delete"});
+  setTimeout(() => {
+    send({type:"keyup", code:"Delete"});
+    send({type:"keyup", code:"AltLeft"});
+    send({type:"keyup", code:"ControlLeft"});
+  }, 100);
+  canvas.focus();
+});
+document.getElementById("btnViewOnly").addEventListener("click", () => {
+  const btn = document.getElementById("btnViewOnly");
+  viewOnly = !viewOnly;
+  btn.classList.toggle("active", viewOnly);
+  if (viewOnly) showCursor = true;
+  updateCursor();
+});
+document.getElementById("btnCursor").addEventListener("click", () => {
+  const btn = document.getElementById("btnCursor");
+  showCursor = !showCursor;
+  btn.classList.toggle("active", showCursor);
+  updateCursor();
+  canvas.focus();
+});
+function updateCursor() {
+  canvas.style.cursor = showCursor ? "default" : "none";
+  document.getElementById("btnCursor").classList.toggle("active", showCursor);
+}
+document.getElementById("btnScale").addEventListener("click", () => {
+  const btn = document.getElementById("btnScale");
+  if (scaleMode === "native") { scaleMode = "fit"; btn.textContent = "Fit"; }
+  else { scaleMode = "native"; btn.textContent = "1:1"; }
+  updateCanvasSize();
+  canvas.focus();
+});
+document.getElementById("btnAltTab").addEventListener("click", () => {
+  send({type:"keydown", code:"AltLeft"});
+  send({type:"keydown", code:"Tab"});
+  setTimeout(() => {
+    send({type:"keyup", code:"Tab"});
+    send({type:"keyup", code:"AltLeft"});
+  }, 100);
+  canvas.focus();
+});
+document.getElementById("btnFs").addEventListener("click", () => {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+  else document.exitFullscreen();
+  canvas.focus();
+});
+// Fullscreen: keyboard lock + toolbar auto-hide
+let _tbLeft = 0;
+let _tbWidth = 0;
+function _tbCenter() {
+  _tbWidth = toolbar.offsetWidth;
+  _tbLeft = (window.innerWidth - _tbWidth) / 2;
+  toolbar.style.left = _tbLeft + "px";
+}
+document.addEventListener("fullscreenchange", () => {
+  const isFs = !!document.fullscreenElement;
+  document.body.classList.toggle("fs-autohide", isFs);
+  if (isFs) {
+    if (navigator.keyboard && navigator.keyboard.lock)
+      navigator.keyboard.lock(["AltLeft","AltRight","Tab","MetaLeft","MetaRight","Escape"]).catch(() => {});
+    requestAnimationFrame(_tbCenter);
+  } else {
+    toolbar.classList.remove("visible");
+    toolbar.style.left = "";
+  }
+  updateCanvasSize();
+});
+window.addEventListener("resize", () => { if (document.fullscreenElement) _tbCenter(); });
+
+// Auto-show/hide toolbar in fullscreen when mouse nears center-top
+let _tbTimer = null;
+function _tbShow() { toolbar.classList.add("visible"); clearTimeout(_tbTimer); }
+function _tbScheduleHide() {
+  clearTimeout(_tbTimer);
+  _tbTimer = setTimeout(() => toolbar.classList.remove("visible"), 1500);
+}
+document.addEventListener("mousemove", (e) => {
+  if (!document.body.classList.contains("fs-autohide")) return;
+  if (_tbDragging) return;
+  const pad = 80;
+  const inX = e.clientX >= _tbLeft - pad && e.clientX <= _tbLeft + _tbWidth + pad;
+  if (inX && e.clientY < 50) _tbShow();
+  else if (toolbar.classList.contains("visible")) _tbScheduleHide();
+});
+toolbar.addEventListener("mouseenter", () => { if (document.body.classList.contains("fs-autohide")) _tbShow(); });
+toolbar.addEventListener("mouseleave", () => { if (document.body.classList.contains("fs-autohide") && !_tbDragging) _tbScheduleHide(); });
+
+// Drag toolbar horizontally
+let _tbDragging = false, _tbDragX0 = 0, _tbDragL0 = 0;
+toolbar.addEventListener("mousedown", (e) => {
+  if (!document.body.classList.contains("fs-autohide")) return;
+  if (e.target.tagName === "BUTTON") return;
+  _tbDragging = true;
+  _tbDragX0 = e.clientX;
+  _tbDragL0 = _tbLeft;
+  toolbar.classList.add("dragging");
+  e.preventDefault();
+});
+document.addEventListener("mousemove", (e) => {
+  if (!_tbDragging) return;
+  _tbLeft = Math.max(0, Math.min(window.innerWidth - _tbWidth, _tbDragL0 + e.clientX - _tbDragX0));
+  toolbar.style.left = _tbLeft + "px";
+});
+document.addEventListener("mouseup", () => {
+  if (!_tbDragging) return;
+  _tbDragging = false;
+  toolbar.classList.remove("dragging");
+});
+
+// --- Audio playback ---
+let audioCtx = null;
+let audioNode = null;
+let audioCfg = null;
+
+const WORKLET_SRC = `
+class P extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.b = new Float32Array(0);
+    this.port.onmessage = e => {
+      const o = this.b, n = e.data;
+      const m = new Float32Array(o.length + n.length);
+      m.set(o); m.set(n, o.length);
+      this.b = m;
+    };
+  }
+  process(ins, outs) {
+    const out = outs[0], ch = out.length, fr = out[0].length;
+    const need = fr * ch;
+    if (this.b.length >= need) {
+      for (let i = 0; i < fr; i++)
+        for (let c = 0; c < ch; c++)
+          out[c][i] = this.b[i * ch + c];
+      this.b = this.b.slice(need);
+    }
+    return true;
+  }
+}
+registerProcessor("p", P);
+`;
+
+function setupAudioConfig(cfg) {
+  audioCfg = cfg;
+  document.getElementById("btnAudio").style.display = "";
+}
+
+async function startAudio() {
+  if (!audioCfg || audioCtx) return;
+  audioCtx = new AudioContext({sampleRate: audioCfg.sampleRate});
+  const blob = new Blob([WORKLET_SRC], {type: "application/javascript"});
+  const url = URL.createObjectURL(blob);
+  await audioCtx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+  audioNode = new AudioWorkletNode(audioCtx, "p",
+    {outputChannelCount: [audioCfg.channels]});
+  audioNode.connect(audioCtx.destination);
+}
+
+function feedAudio(buf) {
+  if (!audioNode) return;
+  const i16 = new Int16Array(buf);
+  const f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768.0;
+  audioNode.port.postMessage(f32, [f32.buffer]);
+}
+
+document.getElementById("btnAudio").addEventListener("click", async () => {
+  const btn = document.getElementById("btnAudio");
+  if (!audioCtx) {
+    await startAudio();
+    btn.textContent = "\u{1f50a} Audio";
+    btn.classList.add("active");
+  } else if (audioCtx.state === "running") {
+    audioCtx.suspend();
+    btn.textContent = "\u{1f507} Audio";
+    btn.classList.remove("active");
+  } else {
+    audioCtx.resume();
+    btn.textContent = "\u{1f50a} Audio";
+    btn.classList.add("active");
+  }
+  canvas.focus();
+});
+
+// --- PWA ---
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+
+// --- Start ---
+canvas.focus();
+connect();
+</script>
+</body>
+</html>

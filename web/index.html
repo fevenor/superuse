@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<!--
+  Superuse human interface, adapted from the upstream serial-hid-kvm viewer
+  (MIT, see web/vendor/upstream-viewer.html) per third_party/CHANGES.md:
+  session/bootstrap auth, lease-aware takeover/handback, ordered input stream,
+  state-machine driven status, binary video framing with metadata headers.
+-->
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#16213e">
+<title>Superuse</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="toolbar">
+  <button id="btnTakeover" title="接管控制（走释放屏障）">接管</button>
+  <button id="btnHandback" title="交还控制给 agent" disabled>交还</button>
+  <button id="btnCad" title="向目标发送 Ctrl+Alt+Del">Ctrl+Alt+Del</button>
+  <button id="btnAltTab" title="向目标发送 Alt+Tab">Alt+Tab</button>
+  <button id="btnCursor" title="切换本地光标">光标</button>
+  <select id="mouseMode" aria-label="鼠标模式" title="相对模式：接管后点击画面捕获鼠标，Esc 退出">
+    <option value="relative" selected>相对移动</option>
+    <option value="absolute">绝对坐标</option>
+  </select>
+  <button id="btnScale" title="切换 1:1 / 适应">1:1</button>
+  <button id="btnFs" title="全屏">全屏</button>
+  <span id="status">连接中…</span>
+  <span id="fps"></span>
+</div>
+<div id="container"><canvas id="screen" tabindex="0"></canvas>
+  <div id="overlay" hidden>
+    <div id="overlayTitle">视频未就绪</div>
+    <div id="overlayDetail"></div>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

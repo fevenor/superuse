@@ -1,0 +1,40 @@
+name: design-and-tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install uv==0.9.12
+      - run: uv sync --locked --dev
+      - run: uv run --locked python scripts/check_design.py
+      - run: uv run --locked python scripts/check_publication.py --staged
+      - run: uv run --locked ruff check .
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked superuse --version
+      - run: uv build
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install uv==0.9.12
+      - run: uv sync --locked --extra app --dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check web/app.js
+      - run: node tests/web/browser-input.test.cjs
+      # Non-hardware suite: units, simulated integration, MCP bridge
+      # subprocesses, Windows mutex/ACL. No device is opened; hardware marks
+      # stay excluded via pyproject addopts and are never enabled in CI.
+      - run: uv run --locked pytest -q

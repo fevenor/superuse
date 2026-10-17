@@ -1,0 +1,27 @@
+[
+  {
+    "name": "keyboard_release",
+    "hex": "57 ab 00 02 08 00 00 00 00 00 00 00 00 0c",
+    "status": "wire specification; UI behavior requires hardware validation"
+  },
+  {
+    "name": "key_a_down",
+    "hex": "57 ab 00 02 08 00 00 04 00 00 00 00 00 10",
+    "status": "wire specification; UI behavior requires hardware validation"
+  },
+  {
+    "name": "ctrl_a_down",
+    "hex": "57 ab 00 02 08 01 00 04 00 00 00 00 00 11",
+    "status": "wire specification; UI behavior requires hardware validation"
+  },
+  {
+    "name": "mouse_absolute_center_release",
+    "hex": "57 ab 00 04 07 02 00 00 08 00 08 00 1f",
+    "status": "wire specification; UI behavior requires hardware validation"
+  },
+  {
+    "name": "mouse_relative_zero_release",
+    "hex": "57 ab 00 05 05 01 00 00 00 00 0d",
+    "status": "wire specification; UI behavior requires hardware validation"
+  }
+]

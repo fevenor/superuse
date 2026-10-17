@@ -1,0 +1,48 @@
+schema_version = 1
+
+[device]
+mode = "simulated"
+
+[device.serial]
+vid = 0x1209
+pid = 0x0001
+serial_number = ""
+baud = 2000000
+read_timeout_ms = 100
+write_timeout_ms = 250
+
+[device.video]
+vid = 0x345f
+pid = 0x2131
+name = "SK USB3 Video"
+device_path = ""
+backend = "dshow"
+width = 1920
+height = 1080
+requested_fps = 30
+autocrop = false
+
+[server]
+host = "127.0.0.1"
+port = 0
+
+[control]
+lease_ttl_ms = 15000
+renew_interval_ms = 5000
+agent_idle_ms = 60000
+input_queue_limit = 128
+action_timeout_ms = 30000
+fence_timeout_ms = 2000
+
+[video]
+publish_fps = 10
+jpeg_quality = 80
+snapshot_max_width = 1280
+freshness_ms = 1000
+stall_timeout_ms = 2000
+
+[logging]
+level = "INFO"
+max_bytes = 5242880
+backup_count = 5
+capture_enabled = false

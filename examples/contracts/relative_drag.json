@@ -1,0 +1,6 @@
+{
+  "kind": "mouse_drag_relative",
+  "dx": 2048,
+  "dy": -500,
+  "duration_ms": 100
+}
