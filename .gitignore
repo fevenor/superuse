@@ -9,6 +9,7 @@ __pycache__/
 htmlcov/
 
 # Build output and local state
+/data/
 build/
 dist/
 *.spec.local

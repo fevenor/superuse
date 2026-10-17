@@ -19,6 +19,7 @@ from pathlib import Path
 from superuse.app import Broker, default_web_dir
 from superuse.config import ConfigError, load_config
 from superuse.core.models import Session, SessionKind
+from superuse.paths import resolve_paths
 from superuse.windows import instance, security
 from superuse.windows.tray import TrayApp, open_browser, state_label
 
@@ -58,28 +59,32 @@ def setup_logging(config, *, runtime_dir: Path, console: bool) -> None:
 
 
 def default_runtime_dir() -> Path:
-    if sys.platform == "win32":
-        return Path.home() / "AppData" / "Local" / "Superuse" / "runtime"
-    return Path.home() / ".superuse" / "runtime"
+    return resolve_paths().runtime_dir
 
 
-def _load(path: str | None, real: bool):
+def _load(path: str | Path | None, real: bool):
     overrides = {"device": {"mode": "real"}} if real else None
     try:
         return load_config(user_file=Path(path) if path else None, overrides=overrides)
-    except ConfigError as exc:
+    except (ConfigError, OSError, ValueError) as exc:
         raise SystemExit(f"configuration error: {exc}") from exc
 
 
 class ServeApp:
     def __init__(self, args) -> None:
         self.args = args
-        self.runtime_dir = Path(args.runtime_dir) if args.runtime_dir else default_runtime_dir()
-        self.config = _load(args.config, args.real)
+        self.paths = resolve_paths(runtime_dir=args.runtime_dir, config_file=args.config)
+        self.runtime_dir = self.paths.runtime_dir
+        config = self.paths.config_file
+        # A missing implicit portable config is initialized after the mutex;
+        # a missing explicitly selected config remains a configuration error.
+        pending = self.paths.portable and not args.config and config and not config.exists()
+        self.config = _load(None if pending else config, args.real)
         self.mutex = instance.BrokerMutex()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.broker: Broker | None = None
         self._thread: threading.Thread | None = None
+        self._startup_error: Exception | None = None
         self._stopped = threading.Event()
         self._tray_session: Session | None = None
         self._tray_app: TrayApp | None = None
@@ -91,8 +96,13 @@ class ServeApp:
     def run(self) -> int:
         if not self.mutex.acquire():
             return self._forward_to_primary()
-        setup_logging(self.config, runtime_dir=self.runtime_dir, console=self.args.headless)
         try:
+            try:
+                self.paths.initialize()
+                self.config = _load(self.paths.config_file, self.args.real)
+                setup_logging(self.config, runtime_dir=self.runtime_dir, console=self.args.headless)
+            except OSError as exc:
+                raise SystemExit(f"Cannot write application data: {exc}") from exc
             self._start_broker_thread()
             if self.args.headless or sys.platform != "win32" or self._no_tray_available():
                 self._stopped.wait()
@@ -139,31 +149,37 @@ class ServeApp:
         self._thread.start()
         if not started.wait(timeout=30):
             raise SystemExit("broker failed to start")
+        if self._startup_error is not None:
+            raise SystemExit(
+                "broker failed to start; see the application log"
+            ) from self._startup_error
 
     async def _broker_main(self, started: threading.Event) -> None:
         self.loop = asyncio.get_running_loop()
-        self.broker = Broker(
-            self.config,
-            runtime_dir=self.runtime_dir,
-            web_dir=default_web_dir(),
-        )
         try:
-            await self.broker.start()
             try:
-                await self.broker.wait_healthy(timeout_s=15)
-            except Exception:
-                logger.warning("device not healthy yet; staying in recovery")
-            security.apply_user_only_acl(instance.runtime_path(self.runtime_dir))
-        except Exception as exc:
-            logger.exception("broker start failed: %s", exc)
-            started.set()
-            self._stopped.set()
-            return
-        started.set()
-        try:
+                self.broker = Broker(
+                    self.config,
+                    runtime_dir=self.runtime_dir,
+                    web_dir=default_web_dir(),
+                )
+                await self.broker.start()
+                try:
+                    await self.broker.wait_healthy(timeout_s=15)
+                except Exception:
+                    logger.warning("device not healthy yet; staying in recovery")
+                security.apply_user_only_acl(instance.runtime_path(self.runtime_dir))
+            except Exception as exc:
+                self._startup_error = exc
+                logger.exception("broker start failed: %s", exc)
+                self._stopped.set()
+                return
+            finally:
+                started.set()
             await self._stopped_async()
         finally:
-            await self.broker.stop()
+            if self.broker is not None:
+                await self.broker.stop()
 
     async def _stopped_async(self) -> None:
         while not self._stopped.is_set():
@@ -303,7 +319,7 @@ def _launch_url(record: dict | None) -> str | None:
 
 
 def run_open(args) -> int:
-    runtime_dir = Path(args.runtime_dir) if args.runtime_dir else default_runtime_dir()
+    runtime_dir = resolve_paths(runtime_dir=args.runtime_dir).runtime_dir
     record = asyncio.run(instance.find_healthy_broker(runtime_dir))
     if record is None:
         print("no healthy broker; start Superuse from its tray app first", file=sys.stderr)
@@ -317,7 +333,7 @@ def run_open(args) -> int:
 
 
 def run_status(args) -> int:
-    runtime_dir = Path(args.runtime_dir) if args.runtime_dir else default_runtime_dir()
+    runtime_dir = resolve_paths(runtime_dir=args.runtime_dir).runtime_dir
     record = instance.read_runtime_file(runtime_dir)
     if record is None:
         print(json.dumps({"broker": False}))
@@ -385,7 +401,10 @@ def list_pnp_camera_names() -> list[str]:
 
 
 def run_diagnose(args) -> int:
-    config = _load(args.config, real=False)
+    paths = resolve_paths(config_file=args.config)
+    config_file = paths.config_file
+    pending = paths.portable and not args.config and config_file and not config_file.exists()
+    config = _load(None if pending else config_file, real=False)
     text = diagnostics_text(config, None)
     if args.output:
         out_dir = Path(args.output)

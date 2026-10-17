@@ -36,6 +36,8 @@ uv run --locked superuse serve --real --config superuse.local.toml
 
 配置文件需要通过 `--config` 显式指定；源码入口不会自动读取任意当前目录配置。启动时会中和输入，随后开放观看和控制。找不到设备、多设备匹配或设备被占用会报错，不会改开其他串口/内置摄像头或回退模拟模式。
 
+便携版存在同目录 `data/` 时自动读取 `data/config.toml`，无需指定 `--config`；其默认配置仍为模拟。详见 [Portable 模式](portable.md)。
+
 ## 浏览器操作
 
 页面打开后先进入观看模式。点击“接管”，等待释放屏障完成后才能发送键鼠输入。人工接管会撤销 agent 的旧租约；agent 后续输入得到明确失权结果。
@@ -69,5 +71,7 @@ agent 的典型调用顺序：`get_status` → `capture_screen` → `acquire_con
 ## 文件与退出
 
 默认运行文件位于 `%LOCALAPPDATA%\Superuse`，包括 runtime 凭据、人工保留状态和轮转日志。不要上传整个 runtime 文件、真实配置或目标截图。配置变更需要重启服务；右键托盘选择“退出”可正常释放设备。
+
+portable 模式将这些文件保存在 EXE 旁的 `data/`。从托盘退出后才移动目录，升级时保留自己的 data。
 
 更多问题见[故障排查](troubleshooting.md)，高级运行机制见 [Windows 文档](development/windows-operations.md)。

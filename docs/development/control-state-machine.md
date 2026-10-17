@@ -99,6 +99,8 @@ lease 状态广播只包含 owner 描述、generation、mode、revision；会话
 
 人工 latch 持久化为不含秘密的安全状态标志。先原子写入 latch 再确认人工接管；交还先写为 false 再确认。崩溃重启读取 true 时进入 human_hold；缺失状态文件的首次启动按 false 处理，损坏的已有文件按 true 保守恢复并提示。lease/session/job 不跨进程恢复。
 
+portable 模式的 latch 位于应用目录 data/state/control.json。迁移目录后仍保留该标志，但运行凭据与 instance 每次启动重新生成；搬移不能绕过人工保留，也不会恢复旧 session/lease/job。
+
 同一设备自动重连使用 1、2、4、8、10 秒退避上限；检测到多设备或身份变化则暂停。不能恢复成另一 COM/摄像头，也不能自动恢复 agent 的原动作。
 
 串口 `disconnected` 与 `fault` 均触发上述撤销。新建 SerialActor 后先在新执行器上完成恢复屏障，才能回到 idle/human_hold，旧租约不能跨重连复活。采集重开使用独立于旧源 status 的等待状态；旧源关闭成功后设备暂缺仍按退避继续等待，不因五次失败永久放弃。关闭挂起或关闭失败时禁止创建第二个采集源。重开废止旧 basis，旧源迟到的帧/几何回调不得写入新 capture generation。

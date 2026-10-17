@@ -1,5 +1,7 @@
 # 上游复用记录
 
+Portable 发布：补入 pySerial 3.5 的原始 BSD-3-Clause 文本，来源和 SHA-256 记录在 runtime-licenses.json；用于补齐该版本 wheel 未携带的许可文件。便携 ZIP 同时收集 Python 与安装环境的原始许可，未更改上游代码或许可文本。
+
 来源与固定提交见 `upstream-lock.json`，原作者 Suna.S 的 MIT 文本原样保留在 `licenses/`。完整上游快照仅用于本地审查，不是运行依赖，也不纳入公开分发。锁文件的 `runtime_code_imported=false` 表示未把上游包作为运行时导入；以下选择性适配仍须保留来源。
 
 | 上游路径（serial-hid-kvm @0637902） | 项目路径 | 修改 |

@@ -7,6 +7,8 @@ This is a conservative heuristic, not a guarantee that every secret is found.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
 import re
 import subprocess
@@ -15,6 +17,7 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_DIRS = {
+    "data",
     ".git",
     ".ssh",
     ".aws",
@@ -148,6 +151,16 @@ def main() -> int:
         "--staged", action="store_true", help="read exact Git index, not working files"
     )
     args = parser.parse_args()
+    # Attribution email addresses in exact, hash-pinned upstream licenses are
+    # intentional public provenance. All other sensitive-data rules still apply.
+    license_manifest = ROOT / "third_party/runtime-licenses.json"
+    manifest_data = (
+        git("show", ":third_party/runtime-licenses.json")
+        if args.staged
+        else license_manifest.read_bytes()
+    )
+    pins = json.loads(manifest_data)["licenses"]
+    attribution = {"third_party/" + pin["file"]: pin["sha256"] for pin in pins}
     findings = []
     count = 0
     for name, data in index_files() if args.staged else working_files():
@@ -162,7 +175,12 @@ def main() -> int:
         except UnicodeDecodeError:
             findings.append((name, 0, "review-binary-file"))
             continue
-        findings.extend((name, line, rule) for line, rule in audit_text(text))
+        pinned_license = attribution.get(name) == hashlib.sha256(data).hexdigest()
+        findings.extend(
+            (name, line, rule)
+            for line, rule in audit_text(text)
+            if not (pinned_license and rule == "review-email")
+        )
     if not count:
         raise ValueError("No files selected; stage the publication tree first")
     for name, line, rule in findings:

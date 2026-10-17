@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "licenses": [
+    {
+      "distribution": "pyserial",
+      "version": "3.5",
+      "spdx": "BSD-3-Clause",
+      "file": "licenses/pyserial-3.5-BSD-3-Clause.txt",
+      "url": "https://raw.githubusercontent.com/pyserial/pyserial/v3.5/LICENSE.txt",
+      "sha256": "f91cb9813de6a5b142b8f7f2dede630b5134160aedaeaf55f4d6a7e2593ca3f3"
+    }
+  ]
+}

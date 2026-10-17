@@ -98,6 +98,8 @@ CPU/RSS/包体/启动时间先记录基线，不捏造绝对预算。对比无�
 
 ## 7. Windows 包验收
 
+Portable：先运行 `scripts/build_portable.py`，再运行 `tests/integration/test_portable_package.py`。该用例解压真实 ZIP、从其他 cwd 启动托盘/MCP、迁移到中文和空格路径，并核对凭据轮换、人工保留与不写入个人 AppData；只使用模拟设备。
+
 W01：通知区域无控制台，打开/全屏/接管入口可用。W02：重复启动与退出后句柄释放，路径含中文/空格，非管理员运行。W03：干净环境无预装 Python 可运行、页面无需外网、两种 EXE 的 stdio 行为正确。W04：只读诊断脱敏、日志轮转、许可清单完整、版本和锁文件可追溯。
 
 ## 8. 交付证据格式

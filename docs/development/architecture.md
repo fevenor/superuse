@@ -37,6 +37,7 @@ broker 与托盘在同一进程，主线程处理托盘消息，后台线程运�
 |---|---|
 | `src/superuse/app.py` | broker 组装、设备监督、启动与关闭 |
 | `src/superuse/config.py` | 配置合并和严格校验 |
+| `src/superuse/paths.py` | 托盘/CLI/MCP 共享的常规与 portable 路径发现 |
 | `src/superuse/core/` | 控制权、租约、Job、调度、坐标 basis、帧缓存 |
 | `src/superuse/device/` | 设备发现、协议、串口执行器、真实/模拟采集 |
 | `src/superuse/server/` | HTTP/WS、认证、会话和消息边界 |

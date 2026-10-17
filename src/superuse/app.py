@@ -384,7 +384,14 @@ class Broker:
         """Drive recovery once a fresh frame exists (used at startup/tests)."""
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if self.manager.mode.value == "idle":
+            state = self.manager.get_state()
+            if (
+                state.mode.value in {"idle", "human_hold", "human", "agent"}
+                and state.serial_status is DeviceStatus.READY
+                and state.video_status is DeviceStatus.READY
+                and state.frame_age_ms is not None
+                and state.frame_age_ms <= self.config.freshness_s * 1000
+            ):
                 return
             with contextlib.suppress(ControlError):
                 await self.manager.recover()

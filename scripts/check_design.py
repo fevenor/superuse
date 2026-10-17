@@ -83,7 +83,12 @@ def check_sources() -> int:
         actual = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
         if actual != source["license_git_blob"]:
             raise ValueError(f"Upstream license changed: {path}")
-    return len(lock["sources"])
+    extra = read_json(ROOT / "third_party/runtime-licenses.json")["licenses"]
+    for license in extra:
+        path = ROOT / "third_party" / license["file"]
+        if hashlib.sha256(path.read_bytes()).hexdigest() != license["sha256"]:
+            raise ValueError(f"Runtime dependency license changed: {path}")
+    return len(lock["sources"]) + len(extra)
 
 
 def check_vectors() -> int:

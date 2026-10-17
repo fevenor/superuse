@@ -28,6 +28,19 @@ uv build
 
 ## 2. 构建 Windows 包
 
+推荐构建可整体解压迁移的 portable ZIP：
+
+```powershell
+uv run --locked --extra app --extra packaging python scripts/build_portable.py
+uv run --locked --extra app --extra packaging pytest tests/integration/test_portable_package.py -q
+```
+
+输出 `dist/Superuse-<版本>-windows-x64-portable.zip` 及 SHA-256 文件。脚本要求 Windows x64 和 64 位 Python，每次使用新的 PyInstaller 构建目录，附空 `data/`、原始依赖许可与清单；不复制现有安装的配置或 runtime。构建目录中的符号链接和 Windows junction 会在递归进入前拒绝。空 data 目录即为 portable 模式约定，详见[便携模式](../portable.md)。
+
+GitHub Actions 的 `portable-build` 工作流可手动触发，构建并运行 ZIP 迁移测试，随后上传 ZIP 与校验文件作为 workflow artifact；不会自动创建 GitHub Release。
+
+仅构建常规 onedir：
+
 ```powershell
 uv run --locked --extra app --extra packaging pyinstaller packaging/superuse.spec --noconfirm
 uv run --locked --extra app --extra packaging pytest tests/integration/test_packaging.py -q
@@ -37,7 +50,7 @@ uv run --locked --extra app --extra packaging pytest tests/integration/test_pack
 
 不要把开发者的缓存、配置和测试材料加入资源。构建器可能在字节码/诊断中保留构建目录；面向公开二进制发布应使用通用路径的干净构建环境，并审查归档内容。
 
-二进制发布需补齐 Python、OpenCV、MCP SDK、pywin32 等实际纳入依赖的许可证和 notices；锁文件与项目 MIT 不能代替这项检查。当前 spec 带入项目 LICENSE、NOTICE 和两份直接复用上游许可，完整二进制依赖清单仍是发布前工作。
+portable 构建汇总当前锁定构建环境内各 distribution 的原始许可文件（保守包含构建/测试工具），并附 Python 运行时许可、vendor-library notices 和 JSON 清单。pySerial wheel 缺失的许可由固定版本的上游原文补齐并校验摘要。项目 MIT 不替代依赖许可，升级依赖后应复核清单与实际包；常规 spec 本身仍只附项目及直接复用上游许可。
 
 ## 3. 发布验收
 

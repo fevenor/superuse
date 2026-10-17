@@ -337,11 +337,8 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    runtime_dir = args.runtime_dir
-    if runtime_dir is None:
-        base = Path.home() / "AppData" / "Local" / "Superuse"
-        runtime_dir = (
-            Path(base / "runtime") if base.exists() else Path.home() / ".superuse" / "runtime"
-        )
+    from superuse.paths import resolve_paths
+
+    runtime_dir = resolve_paths(runtime_dir=args.runtime_dir).runtime_dir
     asyncio.run(run_bridge(runtime_dir=runtime_dir, label=args.client_label))
     return 0

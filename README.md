@@ -13,6 +13,12 @@ Superuse 适配 CDC `1209:0001` 与视频 `345F:2131`（`SK USB3 Video`）这一
 
 项目处于开发阶段。真实视频、相对移动、右键、键盘与文档保存流程已经实测；拖动/滚轮、长稳、干净环境分发及更多浏览器兼容仍需验证。详见[验证状态](docs/development/validation.md)。音频、剪贴板、文件传输、任意 Unicode、OTA 和远程网络服务不在当前范围。
 
+## Portable 便携版
+
+将 Windows x64 portable ZIP 整体解压，双击 `Superuse.exe`。EXE 同目录下存在 `data/` 就自动使用便携模式，配置、日志、人工保留状态与运行文件均放在其中；不依赖启动工作目录，也不回退到 AppData。
+
+发布包自带空的 `data/`。首次启动生成 `data/config.toml`，默认模拟；停止应用后编辑配置以启用真实设备。正常退出后可移动整个目录；迁移后检查设备身份并更新 MCP EXE 路径。升级时保留自己的 `data/`。操作与构建见 [portable 说明](docs/portable.md)。
+
 ## 快速开始
 
 Windows x64、Python 3.12、uv；在仓库根目录的 PowerShell 中运行：
@@ -66,6 +72,12 @@ uv run --locked --extra app --extra packaging pyinstaller packaging/superuse.spe
 ```
 
 产物为 `dist/Superuse/`，含托盘 `Superuse.exe` 与 stdio `SuperuseMCP.exe`，运行时需要整个目录。[发布指南](docs/development/releasing.md)说明许可证、敏感信息检查和包验收。
+
+构建带空 `data/`、依赖许可和 SHA-256 校验文件的 portable ZIP：
+
+```powershell
+uv run --locked --extra app --extra packaging python scripts/build_portable.py
+```
 
 ## 文档与许可
 

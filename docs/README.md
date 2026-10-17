@@ -7,6 +7,7 @@ Superuse 是 Windows 上的 SuperKVM 控制软件。被控端通过 HDMI/USB 连
 | 文档 | 解决的问题 |
 |---|---|
 | [使用指南](user-guide.md) | 安装依赖、模拟运行、连接真实设备、浏览器操作和 MCP 接入 |
+| [Portable 模式](portable.md) | data 目录约定、ZIP 构建、升级和迁移 |
 | [故障排查](troubleshooting.md) | 串口占用、画面失联、绝对模式不兼容、人工暂停与失权 |
 | [验证状态](development/validation.md) | 哪些已经测试，哪些仍待验证 |
 

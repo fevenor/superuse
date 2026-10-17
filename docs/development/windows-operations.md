@@ -32,6 +32,8 @@
 
 自定义 runtime 时，state/logs 使用该目录的父目录。文件原子写入，Windows ACL 限制当前用户与必要系统管理员访问；移除 runtime 前核对 instance，避免删除新服务文件。
 
+portable 约定优先于个人目录：EXE 同目录存在 `data/` 时使用其中的 config.toml、runtime、logs、state；不依赖 cwd 或 `_internal`。MCP 与托盘使用同一解析器。只读目录明确失败，不回退 AppData；详见 [Portable 模式](../portable.md)。
+
 ## 3. 本地鉴权
 
 服务只监听 `127.0.0.1`，校验 Host/Origin，不开放任意 CORS。回环监听本身不能替代鉴权；同一用户下可以读取凭据或注入进程的恶意软件不在令牌防护范围内。
@@ -46,6 +48,8 @@
 ## 4. 配置
 
 优先级为内置默认 < `--config` 文件 < 显式 CLI 覆盖（如 `--real`）。字段见 [Schema](../../schemas/contracts.schema.json) 的 Config 和[配置示例](../../config.example.toml)。文件可只覆盖部分字段，按表合并并严格校验未知字段、类型和范围。
+
+portable 模式在未传 `--config` 时加载 data/config.toml，首次启动按模拟模式初始化该文件。常规模式保持显式选择配置。
 
 `renew_interval_ms` 不超过配置 TTL 的一半，`freshness_ms` 小于 `stall_timeout_ms`；实际续租还按当前 TTL/3 限制。真实模式按 VID/PID 与可选稳定身份筛选，多匹配时必须进一步指定身份。COM/视频索引只用于本次映射，不作为稳定配置。
 

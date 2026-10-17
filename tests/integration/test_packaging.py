@@ -47,10 +47,14 @@ async def test_packaged_tray_exe_version():
 
 async def test_packaged_serve_headless_and_web_assets(tmp_path):
     runtime_dir = tmp_path / "rt"
+    config_file = tmp_path / "simulated.toml"
+    config_file.write_text('schema_version=1\n[device]\nmode="simulated"\n', encoding="utf-8")
     proc = await asyncio.create_subprocess_exec(
         str(TRAY_EXE),
         "serve",
         "--headless",
+        "--config",
+        str(config_file),
         "--runtime-dir",
         str(runtime_dir),
         stdout=asyncio.subprocess.PIPE,
@@ -103,10 +107,14 @@ async def test_packaged_mcp_exe_stdio(tmp_path):
 
     # Start a packaged headless broker for the bridge to attach to.
     runtime_dir = tmp_path / "rt"
+    config_file = tmp_path / "simulated.toml"
+    config_file.write_text('schema_version=1\n[device]\nmode="simulated"\n', encoding="utf-8")
     broker_proc = await asyncio.create_subprocess_exec(
         str(TRAY_EXE),
         "serve",
         "--headless",
+        "--config",
+        str(config_file),
         "--runtime-dir",
         str(runtime_dir),
         stdout=asyncio.subprocess.PIPE,

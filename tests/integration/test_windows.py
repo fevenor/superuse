@@ -101,6 +101,8 @@ async def test_cli_status_sanitized(broker):
 
 def test_headless_serve_single_instance_and_health(tmp_path):
     runtime_dir = tmp_path / "rt"
+    config_file = tmp_path / "simulated.toml"
+    config_file.write_text('schema_version=1\n[device]\nmode="simulated"\n', encoding="utf-8")
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -108,6 +110,8 @@ def test_headless_serve_single_instance_and_health(tmp_path):
             "superuse",
             "serve",
             "--headless",
+            "--config",
+            str(config_file),
             "--runtime-dir",
             str(runtime_dir),
         ],
@@ -150,6 +154,8 @@ def test_headless_serve_single_instance_and_health(tmp_path):
                 "superuse",
                 "serve",
                 "--headless",
+                "--config",
+                str(config_file),
                 "--runtime-dir",
                 str(runtime_dir),
             ],

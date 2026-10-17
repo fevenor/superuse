@@ -46,11 +46,13 @@ packages = ["src/superuse"]
 "third_party/licenses" = "superuse/third_party/licenses"
 "third_party/CHANGES.md" = "superuse/third_party/CHANGES.md"
 "third_party/upstream-lock.json" = "superuse/third_party/upstream-lock.json"
+"third_party/runtime-licenses.json" = "superuse/third_party/runtime-licenses.json"
 
 [tool.hatch.build.targets.sdist]
 include = [
     "/src", "/web", "/tests", "/scripts", "/packaging", "/docs", "/schemas", "/examples",
     "/third_party/licenses", "/third_party/upstream-lock.json", "/third_party/CHANGES.md",
+    "/third_party/runtime-licenses.json",
     "/README.md", "/DESIGN.md", "/AGENTS.md", "/CONTRIBUTING.md", "/SECURITY.md",
     "/NOTICE.md", "/LICENSE", "/config.example.toml", "/pyproject.toml", "/uv.lock",
     "/.python-version",
