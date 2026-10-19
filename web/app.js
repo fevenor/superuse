@@ -37,7 +37,9 @@ const state = {
   connected: false,
   viewOnly: false,
   showCursor: true,
-  mouseMode: "relative",
+  mouseMode: "absolute",   // page input mapping; aligned with the device mode
+  deviceMouseMode: null,   // device-side persisted coordinate mode ("absolute"/"relative"/null)
+  deviceInfoText: null,    // one-shot /v1/status device summary for the tooltip
   scaleMode: "fit",
   sequence: 0,
   heldKeys: new Set(),  // W3C codes currently held (non-modifier)
@@ -544,8 +546,7 @@ function neutralizeInput() {
 document.getElementById("mouseMode").addEventListener("change", (e) => {
   neutralizeInput();
   if (document.pointerLockElement === canvas) document.exitPointerLock();
-  state.mouseMode = e.target.value;
-  try { localStorage.setItem("superuse.mouseMode", state.mouseMode); } catch (_) { /* optional preference */ }
+  setInputMode(e.target.value);
   statusEl.textContent = state.mouseMode === "relative"
     ? "相对模式：接管后点击画面捕获鼠标；Esc 释放捕获，控制权仍保留"
     : "绝对模式：控制权保持不变";
@@ -697,6 +698,78 @@ function flashError(err) {
   statusEl.textContent = `错误：${err.code || ""} ${err.message}`;
 }
 
+/* Device-side mouse coordinate mode (persisted in the SuperKVM device; the
+ * local entry can switch it, the LAN entry cannot reach the endpoint). */
+function setInputMode(mode) {
+  state.mouseMode = mode;
+  document.getElementById("mouseMode").value = mode;
+  try { localStorage.setItem("superuse.mouseMode", mode); } catch (_) { /* optional preference */ }
+}
+
+let deviceBusy = false;  // a mode switch / restart transaction is in flight
+
+function renderDeviceMode() {
+  const btn = document.getElementById("btnDeviceMode");
+  const restartBtn = document.getElementById("btnDeviceRestart");
+  btn.disabled = deviceBusy;
+  restartBtn.disabled = deviceBusy;
+  restartBtn.hidden = btn.hidden;  // same visibility rules as the mode button
+  const label = {absolute: "绝对", relative: "相对"}[state.deviceMouseMode] || "未知";
+  btn.textContent = `设备鼠标:${label}`;
+  btn.title = state.deviceMouseMode === "relative"
+    ? "设备处于相对坐标模式（用于移动设备/多屏目标）；点击切回绝对（默认）"
+    : state.deviceMouseMode === "absolute"
+      ? "设备处于绝对坐标模式（默认）；点击切为相对（仅移动设备/多屏目标需要）"
+      : "设备鼠标坐标模式未知；点击尝试设为绝对（默认）";
+  if (state.deviceInfoText) btn.title += `\n${state.deviceInfoText}`;
+  btn.hidden = !state.connected || state.lan || state.source === "simulated";
+}
+
+async function refreshDeviceInfo() {
+  // One-shot read-only diagnostics for the tooltip (firmware/temperature).
+  try {
+    const status = await api("/v1/status");
+    const d = status.device || {};
+    state.deviceInfoText = [
+      d.firmware ? `固件 ${d.firmware}` : null,
+      typeof d.temperature_c === "number" ? `${d.temperature_c.toFixed(1)}°C` : null,
+      d.video_low_power_enabled === true ? "视频低功耗:开" : null,
+    ].filter(Boolean).join(" · ") || null;
+  } catch (err) { state.deviceInfoText = null; }
+  renderDeviceMode();
+}
+
+document.getElementById("btnDeviceMode").addEventListener("click", () => switchDeviceMode());
+document.getElementById("btnDeviceRestart").addEventListener("click", () => restartDevice());
+
+async function switchDeviceMode() {
+  const target = state.deviceMouseMode === "absolute" ? "relative" : "absolute";
+  await runDeviceTransaction(`切换为${target === "absolute" ? "绝对" : "相对"}…`,
+    () => api("/v1/device/mouse-mode", {method: "POST", body: JSON.stringify({mode: target})}));
+}
+
+async function restartDevice() {
+  if (!window.confirm("确定重启 SuperKVM 设备？期间控制中断约 15–30 秒，租约将回收。")) return;
+  await runDeviceTransaction("设备重启中…", () => api("/v1/device/restart", {method: "POST", body: "{}"}));
+}
+
+async function runDeviceTransaction(hint, action) {
+  if (deviceBusy) return;
+  deviceBusy = true;
+  renderDeviceMode();
+  statusEl.textContent = hint;
+  try {
+    const resp = await action();
+    if (resp && resp.state) applyState(resp.state, "device_mouse_mode");
+    statusEl.textContent = "设备操作完成";
+  } catch (err) {
+    flashError(err);
+  } finally {
+    deviceBusy = false;
+    renderDeviceMode();
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* State rendering, heartbeat, renewal                                 */
 /* ------------------------------------------------------------------ */
@@ -713,6 +786,20 @@ function applyState(next, reason) {
   state.frameAgeMs = next.frame_age_ms !== undefined ? next.frame_age_ms : state.frameAgeMs;
   state.serialStatus = next.serial_status !== undefined ? next.serial_status : state.serialStatus;
   state.videoStatus = next.video_status !== undefined ? next.video_status : state.videoStatus;
+  const deviceMode = next.device_mouse_mode !== undefined ? next.device_mouse_mode : state.deviceMouseMode;
+  if (deviceMode !== state.deviceMouseMode) {
+    state.deviceMouseMode = deviceMode;
+    // The device gate rejects absolute reports in relative mode, so the page
+    // input mapping follows the device setting (manual override stays free).
+    if (["absolute", "relative"].includes(deviceMode) && state.mouseMode !== deviceMode) {
+      neutralizeInput();
+      if (document.pointerLockElement === canvas) document.exitPointerLock();
+      setInputMode(deviceMode);
+    }
+    renderDeviceMode();
+  } else {
+    renderDeviceMode();
+  }
   document.body.classList.toggle("simulated", state.source === "simulated");
 
   const ownerText = next.owner ? `${next.owner.kind}（${next.owner.label}）` : "无";
@@ -722,6 +809,9 @@ function applyState(next, reason) {
     recovery: "恢复中", stopping: "停止中",
   }[state.mode] || state.mode;
   statusEl.textContent = `${modeText} · 所有者 ${ownerText} · 串口 ${next.serial_status || "?"} · 视频 ${next.video_status || "?"}`;
+  if (state.deviceMouseMode) {
+    statusEl.textContent += ` · 设备鼠标 ${state.deviceMouseMode === "absolute" ? "绝对" : "相对"}`;
+  }
   document.title = `Superuse — ${modeText}`;
 
   const ownLease = state.mode === "human" && next.owner?.session_id === state.pageSessionId
@@ -839,6 +929,8 @@ document.getElementById("mouseMode").value = state.mouseMode;
     state.connected = true;
     openEvents();
     openVideo();
+    renderDeviceMode();
+    refreshDeviceInfo();
     statusEl.textContent = "已连接（观看模式）";
     showOverlay("观看模式", "点击工具栏“接管”取得键鼠控制。");
     canvas.focus();

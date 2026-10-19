@@ -21,10 +21,12 @@
   <button id="btnCad" title="向目标发送 Ctrl+Alt+Del">Ctrl+Alt+Del</button>
   <button id="btnAltTab" title="向目标发送 Alt+Tab">Alt+Tab</button>
   <button id="btnCursor" title="切换本地光标">光标</button>
-  <select id="mouseMode" aria-label="鼠标模式" title="相对模式：接管后点击画面捕获鼠标，Esc 退出">
-    <option value="relative" selected>相对移动</option>
-    <option value="absolute">绝对坐标</option>
+  <select id="mouseMode" aria-label="鼠标模式" title="绝对坐标（默认，单屏目标）；相对模式：接管后点击画面捕获鼠标，Esc 退出（移动设备/多屏）">
+    <option value="absolute" selected>绝对坐标</option>
+    <option value="relative">相对移动</option>
   </select>
+  <button id="btnDeviceMode" title="设备端持久化的鼠标坐标模式；点击在绝对/相对之间切换（运行时生效，约 1 秒，仅本机页面）" hidden>设备鼠标:--</button>
+  <button id="btnDeviceRestart" title="重启 SuperKVM 设备（同厂商 WebApp 的“重启 KVM”）；期间串口/视频短暂断开，租约回收，仅本机页面" hidden>重启设备</button>
   <button id="btnScale" title="切换 1:1 / 适应">1:1</button>
   <button id="btnFs" title="全屏">全屏</button>
   <button id="btnLogout" title="退出局域网登录" hidden>退出登录</button>

@@ -266,3 +266,59 @@ async def test_c15_semantic_rejection_before_first_packet(harness: Harness):
     assert too_many.value.code == ErrorCode.INPUT_LIMIT
     assert h.input_writes(human.session_id) == []
     await h.teardown()
+
+
+async def test_absolute_actions_fail_fast_in_relative_device_mode(harness: Harness):
+    """Known relative device mode: absolute is rejected up front; others unaffected."""
+    from superuse.core.models import MouseMove, MouseMoveRelative
+
+    h = harness
+    agent, record = await h.acquire_agent()
+    h.manager.set_device_mouse_mode("relative")
+
+    with pytest.raises(ControlError) as exc:
+        await h.scheduler.submit_command(
+            agent,
+            envelope(record.lease, MouseMove(basis_id=h.basis_id, x=10, y=10)),
+        )
+    assert exc.value.code is ErrorCode.DEVICE_MOUSE_MODE
+    assert not h.input_writes(agent.session_id)  # failed before the first packet
+
+    relative = await h.scheduler.submit_command(
+        agent, envelope(record.lease, MouseMoveRelative(10, 10), n=2)
+    )
+    await h.advance(0.1)  # virtual clock fires the inter-report waits
+    await h.scheduler.wait_job(relative.job_id, 5.0)
+    assert relative.status.value == "written"
+
+    # Unknown mode (device-info query unanswered) must not block absolute input.
+    h.manager.set_device_mouse_mode(None)
+    absolute = await h.scheduler.submit_command(
+        agent, envelope(record.lease, MouseMove(basis_id=h.basis_id, x=10, y=10), n=3)
+    )
+    await h.advance(0.1)
+    await h.scheduler.wait_job(absolute.job_id, 5.0)
+    assert absolute.status.value == "written"
+
+
+async def test_human_stream_absolute_rejected_in_relative_device_mode(harness: Harness):
+    from superuse.core.models import HumanInputEnvelope, MouseState
+
+    h = harness
+    human = h.human()
+    record = await h.manager.takeover(human)
+    h.manager.set_device_mouse_mode("relative")
+
+    acks = []
+    stream = h.scheduler.attach_stream(human, acks.append)
+    stream.handle(
+        HumanInputEnvelope(
+            sequence=1,
+            lease=record.lease,
+            action=MouseState(basis_id=h.basis_id, x=100, y=100, buttons=0),
+        )
+    )
+    await settle()
+    assert acks[-1].status == "rejected"
+    assert acks[-1].error["code"] == ErrorCode.DEVICE_MOUSE_MODE.value
+    assert not h.input_writes(human.session_id)

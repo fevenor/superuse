@@ -404,6 +404,7 @@ class InputScheduler:
         elif isinstance(action, (MouseMove, MouseClick, MouseDrag, MouseScroll, MouseState)):
             # Resolvable now (fail before first packet) and re-checked per step.
             self._bases.resolve(action.basis_id, self._clock.now)
+            self._manager.check_absolute_mouse()
 
     @staticmethod
     def _check_code(code: str) -> None:
@@ -538,6 +539,7 @@ class InputScheduler:
     def _abs(
         self, basis_id: str, x: float, y: float, buttons: int, now: float, wheel: int = 0
     ) -> MouseAbsReport:
+        self._manager.check_absolute_mouse()
         basis = self._bases.resolve(basis_id, now)
         hid_x, hid_y = map_point(basis, x, y)
         return MouseAbsReport(buttons, hid_x, hid_y, wheel)
@@ -726,6 +728,10 @@ class InputScheduler:
             "BACKPRESSURE": (
                 ErrorCode.INPUT_BACKPRESSURE,
                 "Input queue full; report not scheduled",
+            ),
+            "MOUSE_MODE": (
+                ErrorCode.DEVICE_MOUSE_MODE,
+                "Device mouse coordinate mode is relative; absolute report rejected",
             ),
             "TIMEOUT": (ErrorCode.SERIAL_WRITE_FAILED, "Serial write timed out; result uncertain"),
             "SHORT_WRITE": (ErrorCode.SERIAL_WRITE_FAILED, "Short serial write; result uncertain"),
@@ -939,12 +945,14 @@ class HumanInputStream:
             keys = tuple(keymap.hid_for_code(c) for c in action.keys)
             report: InputReport = KeyboardReport(modifier, keys)
         elif isinstance(action, MouseState):
+            self._manager.check_absolute_mouse()
             basis = self._scheduler._bases.resolve(action.basis_id, now)
             hid_x, hid_y = map_point(basis, action.x, action.y)
             report = MouseAbsReport(action.buttons, hid_x, hid_y, 0)
         elif isinstance(action, MouseRelativeState):
             report = MouseRelReport(action.buttons, action.dx, action.dy, action.wheel)
         elif isinstance(action, MouseScroll):
+            self._manager.check_absolute_mouse()
             basis = self._scheduler._bases.resolve(action.basis_id, now)
             hid_x, hid_y = map_point(basis, action.x, action.y)
             report = MouseAbsReport(state.buttons, hid_x, hid_y, action.steps)
@@ -960,6 +968,11 @@ class HumanInputStream:
         if not outcome.ok:
             if outcome.error == "REVOKED":
                 raise ControlError(ErrorCode.CONTROL_REVOKED, "Report superseded")
+            if outcome.error == "MOUSE_MODE":
+                raise ControlError(
+                    ErrorCode.DEVICE_MOUSE_MODE,
+                    "Device mouse coordinate mode is relative; absolute report rejected",
+                )
             self._manager.set_serial_status(DeviceStatus.FAULT)
             raise ControlError(ErrorCode.SERIAL_WRITE_FAILED, "Serial write failed")
         state.apply(report)

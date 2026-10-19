@@ -105,3 +105,59 @@ def test_device_info_parse_tolerates_short_payloads():
     short = parse_device_info(bytes(24))
     assert "firmware" in short and "build_time" not in short
     assert parse_device_info(bytes(4)) == {}
+
+
+def test_mouse_mode_frame_matches_vendor_setmos_emode():
+    """The listed extension write must be byte-identical to the vendor frame.
+
+    Expected layout: 57 AB | ch=1 | sn=0 | dst=0 | total=9 | kind=5 | size=3
+    | payload [mode,0,1] | weighted CRC32 LE (vendor webapp setMouseMode).
+    """
+    from superuse.device.protocol import build_mouse_mode_frame
+
+    assert build_mouse_mode_frame(2).hex(" ") == (
+        "57 ab 01 00 00 00 00 09 00 00 00 05 00 03 00 00 00 02 00 01 b6 01 00 00"
+    )
+    assert build_mouse_mode_frame(1).hex(" ") == (
+        "57 ab 01 00 00 00 00 09 00 00 00 05 00 03 00 00 00 01 00 01 a4 01 00 00"
+    )
+    with pytest.raises(ValueError):
+        build_mouse_mode_frame(3)
+    with pytest.raises(ValueError):
+        build_mouse_mode_frame(0)
+
+
+def test_device_info_mouse_coordinate_mode_names():
+    from superuse.device.protocol import MOUSE_MODE_ABSOLUTE, mouse_mode_name
+
+    payload = bytearray(135)
+    payload[25] = 2
+    info = parse_device_info(bytes(payload))
+    assert info["mouse_coordinate_mode_raw"] == 2
+    assert info["mouse_coordinate_mode"] == "absolute"
+    assert mouse_mode_name(MOUSE_MODE_ABSOLUTE) == "absolute"
+    payload[25] = 1
+    assert parse_device_info(bytes(payload))["mouse_coordinate_mode"] == "relative"
+    payload[25] = 7  # unknown firmware value: raw kept, name omitted
+    assert parse_device_info(bytes(payload))["mouse_coordinate_mode"] is None
+
+
+def test_parse_general_reply():
+    from superuse.device.protocol import parse_general_reply
+
+    assert parse_general_reply(bytes((0, 3))) == {"rsp_code": 0, "app_id": 3}
+    assert parse_general_reply(bytes((1, 3)))["rsp_code"] == 1
+    assert parse_general_reply(b"\x00") == {"rsp_code": None, "app_id": None}
+
+
+def test_device_restart_frame_matches_vendor():
+    """Vendor restartDevice: channel=1, kind=10, payload [1,0,0,0]."""
+    from superuse.device.protocol import build_device_restart_frame
+
+    frame = build_device_restart_frame()
+    channel, sn, dst, total, kind, size = EXT_HEADER.unpack_from(frame, 2)
+    assert (channel, sn, dst, kind, size) == (1, 0, 0, 10, 4)
+    assert total == size + 6
+    assert frame[17:21] == bytes((1, 0, 0, 0))
+    (checksum,) = struct.unpack_from("<I", frame, len(frame) - 4)
+    assert checksum == ext_checksum(frame[:-4])

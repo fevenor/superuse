@@ -3,9 +3,11 @@
 Task 2026-10-17 T5. This is a second *entrance*, not a second control core:
 the LanApi reuses the broker's manager/scheduler/sessions/hub and mounts a
 route subset of the loopback API. What is deliberately absent here:
-bootstrap issuance, agent sessions, /v1/ui/launch and every other
-local-management surface — a remote browser identity can never be read as a
-launcher/agent credential.
+bootstrap issuance, agent sessions, /v1/ui/launch, /v1/device/mouse-mode,
+/v1/device/restart and
+every other local-management surface — a remote browser identity can never be
+read as a launcher/agent credential, and device configuration writes stay on
+the local entry.
 
 Origin is decided by which listener served the request (this one), never by
 client claims or X-Forwarded-*.

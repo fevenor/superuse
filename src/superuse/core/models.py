@@ -121,6 +121,10 @@ class State:
     # contract stays valid for healthy devices (task 2026-10-17 T2).
     serial_detail: str | None = None
     video_detail: str | None = None
+    # Device mouse coordinate mode ("absolute" | "relative") from the last
+    # device-info reply; omitted while unknown (simulated source, query not
+    # yet answered). The persisted device setting gates report types.
+    mouse_mode: str | None = None
 
     def to_wire(self) -> dict:
         wire = {
@@ -140,6 +144,8 @@ class State:
             wire["serial_detail"] = self.serial_detail
         if self.video_detail is not None:
             wire["video_detail"] = self.video_detail
+        if self.mouse_mode is not None:
+            wire["device_mouse_mode"] = self.mouse_mode
         return wire
 
 

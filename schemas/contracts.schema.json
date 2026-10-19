@@ -279,6 +279,10 @@
           "type": "string",
           "maxLength": 120,
           "description": "Why the video device is not ready."
+        },
+        "device_mouse_mode": {
+          "enum": ["absolute", "relative"],
+          "description": "Device-side persisted mouse coordinate mode from the last device-info reply; omitted while unknown. The device gates absolute (0x04) reports in relative mode."
         }
       },
       "allOf": [
@@ -421,6 +425,57 @@
             "type": "string",
             "maxLength": 80
           }
+        },
+        "device": {
+          "$ref": "#/$defs/DeviceDiagnostics"
+        }
+      }
+    },
+    "DeviceDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Sanitized summary of the last device-info reply; absent while no reply has landed (simulated source). Never carries serial numbers, device paths or tokens.",
+      "properties": {
+        "mouse_mode": {
+          "enum": ["absolute", "relative"]
+        },
+        "mouse_mode_raw": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "firmware": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "hardware": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "bootloader": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "temperature_c": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 200
+        },
+        "run_state_raw": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "video_low_power_enabled": {
+          "type": "boolean"
+        },
+        "usb_vid": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "usb_pid": {
+          "type": "string",
+          "maxLength": 10
         }
       }
     },
@@ -1072,6 +1127,7 @@
         "INSTANCE_CHANGED",
         "DEVICE_UNAVAILABLE",
         "DEVICE_AMBIGUOUS",
+        "DEVICE_MOUSE_MODE",
         "VIDEO_STALE",
         "VIDEO_UNAVAILABLE",
         "FRAME_TIMEOUT",

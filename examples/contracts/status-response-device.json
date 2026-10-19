@@ -1,0 +1,37 @@
+{
+  "state": {
+    "api_version": 1,
+    "instance_id": "11111111-1111-4111-8111-111111111111",
+    "state_revision": 10,
+    "generation": 7,
+    "mode": "agent",
+    "owner": {
+      "kind": "agent",
+      "session_id": "33333333-3333-4333-8333-333333333333",
+      "label": "agent-a"
+    },
+    "human_latched": false,
+    "source": "real",
+    "serial_status": "ready",
+    "video_status": "ready",
+    "frame_age_ms": 80,
+    "device_mouse_mode": "absolute"
+  },
+  "capabilities": [
+    "capture_screen",
+    "press_key",
+    "mouse_click"
+  ],
+  "device": {
+    "mouse_mode": "absolute",
+    "mouse_mode_raw": 2,
+    "firmware": "0.9.16",
+    "hardware": "1.1.0",
+    "bootloader": "0.9.8",
+    "temperature_c": 38.75,
+    "run_state_raw": 3,
+    "video_low_power_enabled": false,
+    "usb_vid": "0x1209",
+    "usb_pid": "0x1"
+  }
+}

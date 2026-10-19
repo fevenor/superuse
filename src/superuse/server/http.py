@@ -40,6 +40,7 @@ STATUS_BY_CODE: dict[str, int] = {
     ErrorCode.INPUT_LIMIT.value: 400,
     ErrorCode.COORDINATE_OUT_OF_BOUNDS.value: 400,
     ErrorCode.STALE_BASIS.value: 410,
+    ErrorCode.DEVICE_MOUSE_MODE.value: 409,
     ErrorCode.RATE_LIMITED.value: 429,
     ErrorCode.INPUT_BACKPRESSURE.value: 429,
     ErrorCode.BROKER_UNAVAILABLE.value: 503,
@@ -87,6 +88,9 @@ class Api:
         hub: FrameHub,
         web_dir: Path | None = None,
         network=None,
+        device_control=None,
+        device_restart=None,
+        device_info_provider=None,
     ) -> None:
         self.config = config
         self.manager = manager
@@ -95,6 +99,16 @@ class Api:
         self.hub = hub
         self.web_dir = web_dir
         self.network = network
+        # Broker.set_device_mouse_mode; local page only (the LAN route table
+        # deliberately omits this endpoint — device config stays local).
+        self.device_control = device_control
+        # Broker.restart_device; local page only, same policy as the mode
+        # switch (device management stays off the LAN entrance). Named
+        # *_control so it never shadows the route method below.
+        self.device_restart_control = device_restart
+        # Broker.device_diagnostics: sanitized device-info summary or None
+        # while no reply has landed (simulated source stays absent).
+        self.device_info_provider = device_info_provider
         self.port = 0
 
     # ------------------------------------------------------------------
@@ -344,9 +358,12 @@ class Api:
             "release_inputs",
             "cancel_action",
         ]
-        return json_response(
-            {"state": self.manager.get_state().to_wire(), "capabilities": capabilities}
-        )
+        response: dict = {"state": self.manager.get_state().to_wire(), "capabilities": capabilities}
+        if self.device_info_provider is not None:
+            device = self.device_info_provider()
+            if device:
+                response["device"] = device
+        return json_response(response)
 
     async def control_acquire(self, request: web.Request) -> web.Response:
         session = self.auth_agent(request)
@@ -427,6 +444,38 @@ class Api:
             raise ControlError(ErrorCode.INVALID_REQUEST, "Expected {request_id}")
         state = await self.manager.handback(session)
         return json_response(state.to_wire())
+
+    async def device_mouse_mode(self, request: web.Request) -> web.Response:
+        """Human-only, local-entry device coordinate-mode switch (CSRF)."""
+        self.auth_browser_page(request, require_csrf=True)
+        body = await self.parse_json_object(request)
+        if set(body) != {"mode"}:
+            raise ControlError(ErrorCode.INVALID_REQUEST, "Expected {mode}")
+        mode = body["mode"]
+        raw = {"absolute": 2, "relative": 1}.get(mode) if isinstance(mode, str) else None
+        if raw is None:
+            raise ControlError(ErrorCode.INVALID_REQUEST, "mode must be absolute or relative")
+        if self.device_control is None:  # pragma: no cover - broker always wires it
+            raise ControlError(ErrorCode.DEVICE_UNAVAILABLE, "Device control not wired")
+        state = await self.device_control(raw)
+        device = self.device_info_provider() if self.device_info_provider else None
+        return json_response({"mouse_mode": mode, "state": state, "device": device})
+
+    async def device_restart(self, request: web.Request) -> web.Response:
+        """Human-only, local-entry device restart (CSRF).
+
+        Matches the vendor webapp's "重启 KVM": writes the listed restart
+        command, cycles our serial handle and waits for re-attach. Takes
+        15-60s while the device re-enumerates.
+        """
+        self.auth_browser_page(request, require_csrf=True)
+        body = await self.parse_json_object(request)
+        if body:
+            raise ControlError(ErrorCode.INVALID_REQUEST, "Restart takes no fields")
+        if self.device_restart_control is None:  # pragma: no cover - broker wires it
+            raise ControlError(ErrorCode.DEVICE_UNAVAILABLE, "Device restart not wired")
+        state = await self.device_restart_control()
+        return json_response({"restarted": True, "state": state})
 
     async def post_command(self, request: web.Request) -> web.Response:
         session = self.auth_any(request, require_csrf=True)
@@ -529,6 +578,8 @@ class Api:
         app.router.add_post("/v1/control/release", self.control_release)
         app.router.add_post("/v1/control/takeover", self.control_takeover)
         app.router.add_post("/v1/control/handback", self.control_handback)
+        app.router.add_post("/v1/device/mouse-mode", self.device_mouse_mode)
+        app.router.add_post("/v1/device/restart", self.device_restart)
         app.router.add_post("/v1/commands", self.post_command)
         app.router.add_get("/v1/jobs/{job_id}", self.get_job)
         app.router.add_post("/v1/jobs/{job_id}/cancel", self.cancel_job)

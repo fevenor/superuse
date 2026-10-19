@@ -134,7 +134,16 @@ class FakeSerialActor:
         self._wakeup.set()
         if self.fence_neutral_fail:
             return FenceResult(ok=False, error="WRITE_FAILED")
-        neutral = (KeyboardReport(0, ()), MouseRelReport(0, 0, 0, 0))
+        from superuse.core.models import MouseAbsReport
+
+        # Mirrors the real actor: 0x05 zero AND a zero-button 0x04 at the last
+        # absolute position — each is a no-op in the other device mode
+        # (hardware evidence 2026-10-19 hm11), so unknown modes stay covered.
+        neutral = (
+            KeyboardReport(0, ()),
+            MouseRelReport(0, 0, 0, 0),
+            MouseAbsReport(0, 2048, 2048, 0),
+        )
         for report in neutral:
             self._record(report, session_id="__fence__", generation=ticket.generation, neutral=True)
         return FenceResult(ok=True, neutral_reports=neutral)

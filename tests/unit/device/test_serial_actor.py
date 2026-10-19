@@ -83,10 +83,13 @@ async def test_actor_writes_and_revokes_by_generation():
         assert fence.ok
         stale_outcome = await asyncio.wait_for(stale, 2.0)
         assert stale_outcome.error == "REVOKED"
-        # The fence's two neutralization reports hit the wire in order.
-        assert serial.writes[-2:] == [
+        # The fence's three neutralization reports hit the wire in order
+        # (the absolute zero lifts buttons in absolute mode, where the 0x05
+        # zero is provably a no-op; hardware evidence 2026-10-19 hm11).
+        assert serial.writes[-3:] == [
             VECTORS["keyboard_release"],
             VECTORS["mouse_relative_zero_release"],
+            VECTORS["mouse_absolute_center_release"],
         ]
         assert all(w != VECTORS["key_a_down"].replace(b"\x04", b"\x05", 1) for w in serial.writes)
     finally:
@@ -228,4 +231,122 @@ async def test_actor_input_queue_backpressure():
             f.cancel()
     finally:
         serial.unblock_writes()
+        actor.stop()
+
+
+async def test_set_mouse_mode_writes_vendor_frame_then_requeries():
+    from superuse.device.protocol import build_mouse_mode_frame
+
+    serial = SimulatedSerial()
+    actor = SerialActor(lambda: serial, loop=asyncio.get_running_loop())
+    actor.start(query_device_info=False)
+    try:
+        outcome = await asyncio.wait_for(actor.set_mouse_mode(2), 1.0)
+        assert outcome.ok
+        assert serial.writes[0] == build_mouse_mode_frame(2)
+        # The follow-up query is enqueued after the write; the future may
+        # already have resolved, so poll briefly for the second write.
+        for _ in range(200):
+            if len(serial.writes) >= 2:
+                break
+            await asyncio.sleep(0.005)
+        assert serial.writes[1] == build_device_info_query()
+    finally:
+        actor.stop()
+
+
+async def test_device_info_callback_and_write_time_absolute_gate():
+    from superuse.core.models import MouseRelReport
+    from superuse.device.protocol import build_ext_frame
+
+    payload = bytearray(64)
+    payload[25] = 1  # relative coordinate mode
+    reply = build_ext_frame(1, 0x81, bytes(payload))
+
+    seen: list[dict] = []
+    notified = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def on_info(info: dict) -> None:
+        seen.append(info)
+        notified.set()
+
+    serial = SimulatedSerial()
+    actor = SerialActor(lambda: serial, loop=loop, on_device_info=on_info)
+    actor.start(query_device_info=False)
+    try:
+        serial.queue_response(reply)
+        await asyncio.wait_for(notified.wait(), 1.0)
+        assert seen[-1]["mouse_coordinate_mode"] == "relative"
+
+        def submit(report):
+            return asyncio.wait_for(
+                actor.submit(
+                    AuthorizedReport(
+                        session_id="s", lease_id="l", generation=actor._generation, report=report
+                    )
+                ),
+                1.0,
+            )
+
+        abs_outcome = await submit(MouseAbsReport(0, 2048, 2048, 0))
+        assert abs_outcome.error == "MOUSE_MODE"  # final executor gate
+        rel_outcome = await submit(MouseRelReport(0, 1, 1, 0))
+        assert rel_outcome.ok
+
+        # A later reply reporting absolute mode reopens the absolute path.
+        payload[25] = 2
+        reopened = asyncio.Event()
+
+        def on_info2(info: dict) -> None:
+            if info.get("mouse_coordinate_mode") == "absolute":
+                reopened.set()
+
+        actor._on_device_info = on_info2
+        serial.queue_response(build_ext_frame(1, 0x81, bytes(payload)))
+        await asyncio.wait_for(reopened.wait(), 1.0)
+        abs_outcome2 = await submit(MouseAbsReport(0, 2048, 2048, 0))
+        assert abs_outcome2.ok
+    finally:
+        actor.stop()
+
+
+async def test_set_mouse_mode_consumes_general_reply():
+    from superuse.device.protocol import build_ext_frame
+
+    serial = SimulatedSerial()
+    actor = SerialActor(lambda: serial, loop=asyncio.get_running_loop())
+    actor.start(query_device_info=False)
+    try:
+        # rsp_code 0 -> accepted
+        serial.queue_response(build_ext_frame(1, 0, bytes((0, 3))))
+        outcome = await asyncio.wait_for(actor.set_mouse_mode(2, reply_timeout_s=1.0), 2.0)
+        assert outcome.ok
+        # rsp_code 1 -> rejected with the code surfaced
+        serial.queue_response(build_ext_frame(1, 0, bytes((1, 3))))
+        outcome = await asyncio.wait_for(actor.set_mouse_mode(2, reply_timeout_s=1.0), 2.0)
+        assert outcome.error == "REJECTED:1"
+        # no reply at all -> optimistic ok, re-query stays authoritative
+        outcome = await asyncio.wait_for(actor.set_mouse_mode(1, reply_timeout_s=0.05), 2.0)
+        assert outcome.ok
+    finally:
+        actor.stop()
+
+
+async def test_restart_device_write_tolerates_missing_reply_and_closed_port():
+    from superuse.device.protocol import build_device_restart_frame
+
+    serial = SimulatedSerial()
+    actor = SerialActor(lambda: serial, loop=asyncio.get_running_loop())
+    actor.start(query_device_info=False)
+    try:
+        outcome = await asyncio.wait_for(actor.restart_device(reply_timeout_s=0.05), 2.0)
+        assert outcome.ok  # no kind-0 reply in time: tolerated (device reboots)
+        assert serial.writes[0] == build_device_restart_frame()
+
+        # A port that dies mid-write also counts as sent (reboot began).
+        serial.closed_mode = True
+        outcome = await asyncio.wait_for(actor.restart_device(reply_timeout_s=0.05), 2.0)
+        assert outcome.error == "CLOSED"
+    finally:
         actor.stop()

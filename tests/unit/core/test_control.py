@@ -288,3 +288,25 @@ async def test_c16_shutdown_wins_over_late_takeover_callback(harness: Harness):
     with pytest.raises((ControlError, asyncio.InvalidStateError)):
         task.result()
     assert h.manager.get_state().mode is Mode.STOPPING
+
+
+async def test_device_mouse_mode_state_gate_and_clearing(harness: Harness):
+    """The persisted device mode gates absolute actions and clears on serial loss."""
+    from superuse.core.models import DeviceStatus
+
+    h = harness
+    assert "device_mouse_mode" not in h.manager.get_state().to_wire()  # unknown omitted
+
+    h.manager.set_device_mouse_mode("relative")
+    assert h.manager.get_state().to_wire()["device_mouse_mode"] == "relative"
+    with pytest.raises(ControlError) as exc:
+        h.manager.check_absolute_mouse()
+    assert exc.value.code is ErrorCode.DEVICE_MOUSE_MODE
+
+    h.manager.set_device_mouse_mode("absolute")
+    h.manager.check_absolute_mouse()  # known absolute passes
+
+    # Serial leaving READY must not keep a stale mode from a previous actor.
+    h.manager.set_serial_status(DeviceStatus.FAULT)
+    assert "device_mouse_mode" not in h.manager.get_state().to_wire()
+    h.manager.check_absolute_mouse()  # unknown stays permissive (query may just have failed)

@@ -27,8 +27,27 @@ EXT_CHECKSUM = struct.Struct("<I")
 EXT_QUERY_CHANNEL = 1
 EXT_QUERY_KIND = 1
 EXT_INFO_KIND = 0x81
+# Channel-1 general reply [rsp_code, app_id]: the device's acknowledgement for
+# every extension write (rsp_code 0 = accepted); also arrives unsolicited for
+# vendor flows we do not drive.
+EXT_GENERAL_REPLY_KIND = 0
+# The single listed extension write: the vendor webapp's setMouseMode frame
+# (channel=1, kind=5, payload [mode, 0, 1]). Everything else stays read-only.
+EXT_SET_KIND = 5
+# Second listed write: the vendor webapp's restartDevice frame (channel=1,
+# kind=10, payload [1, 0, 0, 0], origin ACT_SET). The mouse coordinate mode
+# only takes effect after the device reboots and rebinds its HID interface
+# (vendor UI: "坐标模式变更，设备需要重启生效"), so remote operation needs this.
+EXT_RESTART_KIND = 10
 EXT_PAYLOAD_LIMIT = 256 * 1024
 EXT_BUFFER_LIMIT = 512 * 1024
+
+# Device mouse coordinate mode (device-info payload[25]); the setting
+# persists in the device and gates which mouse report type moves the pointer.
+# 2 (absolute) is the vendor default; 1 is only for mobile/multi-screen targets.
+MOUSE_MODE_RELATIVE = 1
+MOUSE_MODE_ABSOLUTE = 2
+MOUSE_MODE_NAMES = {MOUSE_MODE_RELATIVE: "relative", MOUSE_MODE_ABSOLUTE: "absolute"}
 
 
 def hid_checksum(data: bytes) -> int:
@@ -102,6 +121,29 @@ def build_ext_frame(
 def build_device_info_query() -> bytes:
     """Read-only requestDeviceInfo packet (channel=1, kind=1, size=0)."""
     return build_ext_frame(EXT_QUERY_CHANNEL, EXT_QUERY_KIND)
+
+
+def build_mouse_mode_frame(mode: int) -> bytes:
+    """User-authorized setMouseMode write ([mode, 0, 1]); see EXT_SET_KIND."""
+    if mode not in MOUSE_MODE_NAMES:
+        raise ValueError(f"Unknown mouse mode {mode}")
+    return build_ext_frame(EXT_QUERY_CHANNEL, EXT_SET_KIND, bytes((mode, 0, 1)))
+
+
+def build_device_restart_frame() -> bytes:
+    """User-authorized restartDevice write ([1, 0, 0, 0]); see EXT_RESTART_KIND."""
+    return build_ext_frame(EXT_QUERY_CHANNEL, EXT_RESTART_KIND, bytes((1, 0, 0, 0)))
+
+
+def mouse_mode_name(raw: int) -> str | None:
+    return MOUSE_MODE_NAMES.get(raw)
+
+
+def parse_general_reply(payload: bytes) -> dict:
+    """Channel-1 general reply: ``[rsp_code, app_id]``; 0 = accepted."""
+    if len(payload) < 2:
+        return {"rsp_code": None, "app_id": None}
+    return {"rsp_code": payload[0], "app_id": payload[1]}
 
 
 class ExtFrame:
@@ -204,6 +246,7 @@ def parse_device_info(payload: bytes) -> dict:
         info.update(
             {
                 "mouse_coordinate_mode_raw": payload[25],
+                "mouse_coordinate_mode": mouse_mode_name(payload[25]),
                 "usb_baud": struct.unpack_from("<I", payload, 28)[0],
                 "usb_vid": hex(u16(32)),
                 "usb_pid": hex(u16(34)),

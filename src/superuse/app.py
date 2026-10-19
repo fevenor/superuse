@@ -106,6 +106,9 @@ class Broker:
 
         self.actor: SerialActor | None = None
         self.capture: SimulatedCapture | CaptureWorker | None = None
+        # Serializes user-triggered device-control writes (mode/restart share
+        # the actor's single pending general-reply slot).
+        self._device_control_lock = asyncio.Lock()
         # True only when both devices opened during start(); a missing device
         # keeps the broker (tray/UI/stdio) alive while the supervisor retries
         # (task 2026-10-17 T2).
@@ -162,6 +165,9 @@ class Broker:
             hub=self.hub,
             web_dir=web_dir,
             network=self.network,
+            device_control=self.set_device_mouse_mode,
+            device_restart=self.restart_device,
+            device_info_provider=self.device_diagnostics,
         )
         self.ws = None
         self.runner: web.AppRunner | None = None
@@ -208,6 +214,7 @@ class Broker:
             write_timeout_s=device_cfg_serial_write_timeout(self.config),
             input_queue_limit=control["input_queue_limit"],
             on_status=self._on_serial_status,
+            on_device_info=self._on_device_info,
         )
         return transport, actor
 
@@ -324,6 +331,167 @@ class Broker:
         }
         self.manager.set_serial_status(mapping.get(status, DeviceStatus.FAULT))
 
+    def _on_device_info(self, info: dict) -> None:
+        """Device-info reply landed (actor reader thread -> loop callback)."""
+        mode = info.get("mouse_coordinate_mode")
+        self.manager.set_device_mouse_mode(mode if isinstance(mode, str) else None)
+
+    async def _cycle_serial_and_wait(self, timeout_s: float = 60.0) -> None:
+        """Close our serial handle and wait for the supervisor ladder to bring
+        the device back (identity re-matched) and recovery to complete."""
+        actor = self.actor
+        if actor is not None and actor._transport is not None:
+            with contextlib.suppress(Exception):
+                actor._transport.close()
+        # First wait until the reader thread actually observes the close (the
+        # manager leaves READY); otherwise an immediate poll would mistake
+        # the pre-close READY state for a completed cycle.
+        drop_deadline = time.monotonic() + 5.0
+        while time.monotonic() < drop_deadline:
+            if self.manager.get_state().serial_status is not DeviceStatus.READY:
+                break
+            await asyncio.sleep(0.05)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            state = self.manager.get_state()
+            if state.serial_status is DeviceStatus.READY and state.mode.value not in (
+                "recovery",
+                "transition",
+                "stopping",
+            ):
+                break
+            await asyncio.sleep(0.25)
+        else:
+            raise ControlError(
+                ErrorCode.DEVICE_UNAVAILABLE, "Device did not come back after restart"
+            )
+        if not self.config.simulated:
+            # A real device is only "back" once its info reply landed: the CDC
+            # enumerates before the firmware finishes booting, and the mouse
+            # mode is the datum every caller of this cycle depends on.
+            while time.monotonic() < deadline:
+                if self.manager.get_state().mouse_mode is not None:
+                    return
+                await asyncio.sleep(0.25)
+            raise ControlError(
+                ErrorCode.DEVICE_UNAVAILABLE,
+                "Device did not report its mouse mode after restart",
+            )
+
+    async def set_device_mouse_mode(self, mode: int) -> dict:
+        """Coordinate-mode switch (human page only) - the vendor webapp's
+        runtime sequence (verified on hardware 2026-10-19 hm11):
+
+        1. kind-5 mode write (kind-0 rsp checked),
+        2. IMMEDIATELY a mode-matched zero report on the same writer thread -
+           this completes the device's pipeline switch; omitting it is what
+           wedges the mouse pipeline (both report types dropped) until a
+           device restart,
+        3. a read-only re-query, then verify the reported mode.
+
+        No device restart is involved; the whole switch takes seconds.
+        """
+        from superuse.core.models import MouseAbsReport, MouseRelReport
+        from superuse.device.protocol import (
+            MOUSE_MODE_NAMES,
+            build_device_info_query,
+            encode_hid_report,
+        )
+
+        if mode not in MOUSE_MODE_NAMES:
+            raise ControlError(ErrorCode.INVALID_REQUEST, "mode must be 1 or 2")
+        if self.config.simulated:
+            raise ControlError(
+                ErrorCode.INVALID_REQUEST, "Simulated source has no device mouse mode"
+            )
+        expected = MOUSE_MODE_NAMES[mode]
+        zero = MouseRelReport(0, 0, 0, 0) if mode == 1 else MouseAbsReport(0, 0, 0, 0)
+        async with self._device_control_lock:
+            actor = self.actor
+            if actor is None or actor.status != "ready":
+                raise ControlError(ErrorCode.DEVICE_UNAVAILABLE, "Serial device not ready")
+            outcome = await actor.set_mouse_mode(mode, reply_timeout_s=0.2)
+            if outcome.ok:
+                # Same-thread ordering: the zero report and the re-query
+                # follow the mode write before anything else is written.
+                actor._enqueue_control(("raw", encode_hid_report(zero), lambda o: None))
+                actor._enqueue_control(("raw", build_device_info_query(), lambda o: None))
+            else:
+                if (outcome.error or "").startswith("REJECTED:"):
+                    raise ControlError(
+                        ErrorCode.SERIAL_WRITE_FAILED,
+                        f"Device rejected the write (rsp_code={outcome.error.split(':', 1)[1]})",
+                    )
+                if outcome.error == "CLOSED":
+                    raise ControlError(ErrorCode.DEVICE_UNAVAILABLE, "Serial device not ready")
+                raise ControlError(ErrorCode.SERIAL_WRITE_FAILED, f"Write failed: {outcome.error}")
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if self.manager.get_state().mouse_mode == expected:
+                return self.manager.get_state().to_wire()
+            await asyncio.sleep(0.1)
+        final = self.manager.get_state().mouse_mode
+        raise ControlError(
+            ErrorCode.DEVICE_MOUSE_MODE,
+            f"Device still reports {final or 'unknown'} mode after the switch; expected {expected}",
+        )
+
+    async def restart_device(self) -> dict:
+        """User-authorized device restart (human page only).
+
+        Writes the vendor restart command, cycles our serial handle and waits
+        for the supervisor to re-attach the same device identity. Serial and
+        video may both re-enumerate; leases are revoked and recovery runs
+        through the normal state machine.
+        """
+        if self.config.simulated:
+            raise ControlError(ErrorCode.INVALID_REQUEST, "Simulated source has no device")
+        await self._restart_best_effort()
+        await self._cycle_serial_and_wait()
+        return self.manager.get_state().to_wire()
+
+    async def _restart_best_effort(self) -> None:
+        """Send the restart write, tolerating an already-rebooting port.
+
+        CLOSED/TIMEOUT outcomes count as sent (the device drops the CDC
+        connection as it reboots); a rejection or hard failure raises. The
+        follow-up reconnect wait is the end-to-end validation.
+        """
+        async with self._device_control_lock:
+            actor = self.actor
+            if actor is None or actor.status != "ready":
+                return  # already gone; the reconnect cycle re-attaches it
+            outcome = await actor.restart_device()
+        if outcome.ok or outcome.error in ("CLOSED", "TIMEOUT"):
+            return
+        if (outcome.error or "").startswith("REJECTED:"):
+            raise ControlError(
+                ErrorCode.SERIAL_WRITE_FAILED,
+                f"Device rejected the restart write (rsp_code={outcome.error.split(':', 1)[1]})",
+            )
+        raise ControlError(ErrorCode.SERIAL_WRITE_FAILED, f"Restart write failed: {outcome.error}")
+
+    def device_diagnostics(self) -> dict | None:
+        """Sanitized device-info summary for status surfaces (no identities)."""
+        info = self.actor.device_info if self.actor is not None else None
+        if not info:
+            return None
+        wire: dict = {}
+        if info.get("mouse_coordinate_mode") is not None:
+            wire["mouse_mode"] = info["mouse_coordinate_mode"]
+        if isinstance(info.get("mouse_coordinate_mode_raw"), int):
+            wire["mouse_mode_raw"] = info["mouse_coordinate_mode_raw"]
+        for key in ("firmware", "hardware", "bootloader", "usb_vid", "usb_pid"):
+            if isinstance(info.get(key), str):
+                wire[key] = info[key]
+        if isinstance(info.get("temperature_c"), (int, float)):
+            wire["temperature_c"] = info["temperature_c"]
+        if isinstance(info.get("run_state_raw"), int):
+            wire["run_state_raw"] = info["run_state_raw"]
+        if isinstance(info.get("video_low_power_enable_raw"), int):
+            wire["video_low_power_enabled"] = info["video_low_power_enable_raw"] != 0
+        return wire or None
+
     def _on_frame(self, frame) -> None:
         changed = self.hub.publish(frame)
         generation = self.hub.capture_generation
@@ -415,7 +583,11 @@ class Broker:
             "release_inputs",
             "cancel_action",
         ]
-        return {"state": self.manager.get_state().to_wire(), "capabilities": capabilities}
+        wire = {"state": self.manager.get_state().to_wire(), "capabilities": capabilities}
+        device = self.device_diagnostics()
+        if device:
+            wire["device"] = device
+        return wire
 
     async def _start_local_http_mcp(self) -> None:
         """Bind 127.0.0.1:mcp_port when a key is configured (best effort).

@@ -101,6 +101,9 @@ class ControlManager:
         self._video_status = DeviceStatus.DISCONNECTED
         self._serial_detail: str | None = None
         self._video_detail: str | None = None
+        # Device mouse coordinate mode ("absolute"/"relative"), None while
+        # unknown; cleared whenever serial leaves READY (a new actor re-queries).
+        self._mouse_mode: str | None = None
         self._last_frame: float | None = None
         self._pending_ticket: FenceTicket | None = None
         self._pending_future: asyncio.Future[FenceResult] | None = None
@@ -154,6 +157,7 @@ class ControlManager:
             frame_age_ms=frame_age_ms,
             serial_detail=self._serial_detail,
             video_detail=self._video_detail,
+            mouse_mode=self._mouse_mode,
         )
 
     def subscribe(self) -> asyncio.Queue[StateEvent]:
@@ -202,8 +206,32 @@ class ControlManager:
 
     def set_serial_status(self, status: DeviceStatus) -> None:
         self._serial_status = status
+        if status is not DeviceStatus.READY:
+            # The mode came from the previous actor's device-info reply; the
+            # replacement actor re-queries, so unknown must not linger stale.
+            self.set_device_mouse_mode(None)
         if status in (DeviceStatus.FAULT, DeviceStatus.DISCONNECTED):
             self._enter_recovery(f"serial_{status.value}")
+
+    def set_device_mouse_mode(self, mode: str | None) -> None:
+        """Latest device mouse coordinate mode (device-info reply)."""
+        if mode != self._mouse_mode:
+            self._mouse_mode = mode
+            self._publish("device_mouse_mode")
+
+    def check_absolute_mouse(self) -> None:
+        """Fail fast when the device's persisted mode cannot take 0x04 reports.
+
+        Unknown (None) stays permissive: the read-only query may have failed
+        while the input path is fine, and absolute mode is the device default.
+        """
+        if self._mouse_mode == "relative":
+            raise ControlError(
+                ErrorCode.DEVICE_MOUSE_MODE,
+                "Device mouse coordinate mode is relative; absolute actions are"
+                " unavailable until the device is switched (human page) or"
+                " relative actions are used",
+            )
 
     def set_serial_detail(self, detail: str | None) -> None:
         """Why the serial device is not ready; None clears it (task T2)."""

@@ -151,6 +151,8 @@ async def test_i02_authorization_and_csrf_rejections(broker, base_url):
         neutral = {
             bytes.fromhex("57 ab 00 02 08 00 00 00 00 00 00 00 00 0c"),
             bytes.fromhex("57 ab 00 05 05 01 00 00 00 00 0d"),
+            # Absolute-mode button lift at the last position (fence).
+            bytes.fromhex("57 ab 00 04 07 02 00 00 08 00 08 00 1f"),
         }
         hid_writes = [w for w in serial.writes if len(w) >= 6 and w[3] in (0x02, 0x04, 0x05)]
         assert set(hid_writes) <= neutral

@@ -104,7 +104,8 @@ async function main() {
   assert.equal(harness().sandbox.newRequestId(), "test-id", "native randomUUID remains supported");
 
   const h = harness();
-  assert.equal(h.state.mouseMode, "relative", "relative mouse default");
+  assert.equal(h.state.mouseMode, "absolute", "absolute mouse default (vendor default)");
+  h.state.mouseMode = "relative";  // exercise the relative flow explicitly
   h.canvas.events.mousedown({type:"mousedown", preventDefault() {}, buttons:1});
   assert.equal(h.sent.length, 0, "capture click must not press a target button");
   h.canvas.events.mousemove({movementX:10, movementY:0, buttons:1});
@@ -128,6 +129,11 @@ async function main() {
   assert.equal(h.sent.at(-1).action.buttons, 0);
   assert.equal(h.sent.at(-2).action.kind, "keyboard_state");
   assert.equal(h.sent.at(-2).action.keys.length, 0);
+
+  const aligned = harness();
+  aligned.applyState({device_mouse_mode: "relative", state_revision: 2});
+  assert.equal(aligned.state.mouseMode, "relative", "page input mapping follows the device mode");
+  assert(aligned.element("btnDeviceMode").textContent.includes("相对"), "device mode shown on the button");
 
   const viewer = harness();
   viewer.state.lease = null;

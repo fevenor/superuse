@@ -28,7 +28,13 @@ async def until(predicate):
 async def test_disconnect_revokes_owner_and_neutralizes_new_actor(
     broker, monkeypatch, kind, running_job
 ):
-    from superuse.core.models import CommandEnvelope, KeyboardReport, MouseRelReport, TypeText
+    from superuse.core.models import (
+        CommandEnvelope,
+        KeyboardReport,
+        MouseAbsReport,
+        MouseRelReport,
+        TypeText,
+    )
 
     # Drive the supervisor explicitly so observations cannot race auto-recovery.
     broker._supervisor_task.cancel()
@@ -71,6 +77,9 @@ async def test_disconnect_revokes_owner_and_neutralizes_new_actor(
     assert writes == [
         encode_hid_report(KeyboardReport(0, ())),
         encode_hid_report(MouseRelReport(0, 0, 0, 0)),
+        # Absolute-mode button lift at the last written position (center by
+        # default): the 0x05 zero is provably a no-op in absolute mode.
+        encode_hid_report(MouseAbsReport(0, 2048, 2048, 0)),
     ]
     assert broker.actor._generation == broker.manager.generation
     with pytest.raises(ControlError):

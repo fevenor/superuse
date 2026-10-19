@@ -25,7 +25,7 @@ Streamable HTTP（任务 2026-10-17）：`Superuse.exe` 在 `127.0.0.1:mcp_port`
 
 | 工具 | 参数 | 输出/行为 |
 |---|---|---|
-| `get_status` | 无 | state、设备/视频健康、来源真实/模拟、能力；不修改租约 |
+| `get_status` | 无 | state、设备/视频健康、来源真实/模拟、能力；有设备信息回执时附脱敏 `device` 诊断块；不修改租约 |
 | `acquire_control` | `ttl_ms=15000`，5000–30000 | 申请该 agent 的租约；人工锁定/其他 agent 占用时失败 |
 | `release_control` | 无 | 释放自己的租约并中和；无租约时幂等 no-op |
 | `capture_screen` | `max_width=1280`，320–1920；`after_frame_id?`；`wait_ms=2000`，0–2000 | 返回 ImageContent + 同一图片的 frame 元数据，不申请/续租 |
@@ -44,7 +44,9 @@ Streamable HTTP（任务 2026-10-17）：`Superuse.exe` 在 `127.0.0.1:mcp_port`
 
 首版不向 agent 暴露任意持久 key_down/mouse_down，以降低模型停顿留下按住状态的风险。人工前端用状态报告实现持续拖动和多键；agent 的拖动/快捷键工具在后端展开。需要更复杂组合时新增有界批处理设计，不能先加任意原始包出口。
 
-relative 工具与既有绝对工具独立提供；绝对模式不兼容时可选择相对模式。dx/dy 是 HID 计数，**不是图像像素**；目标加速度、边界截断影响实际落点。agent 应小幅移动后重新截图，不能累加计数假定绝对位置，也不能把原 mouse_move(x,y) 静默转成相对位移。无设备 ACK，仍只返回 written。
+relative 工具与既有绝对工具独立提供，用于移动设备/多屏目标等绝对坐标不适用的场景（厂商默认与单屏目标应使用绝对）。dx/dy 是 HID 计数，**不是图像像素**；目标加速度、边界截断影响实际落点。agent 应小幅移动后重新截图，不能累加计数假定绝对位置，也不能把原 mouse_move(x,y) 静默转成相对位移。无设备 ACK，仍只返回 written。
+
+设备持久化鼠标坐标模式（State 可选字段 `device_mouse_mode`：absolute/relative，未知时缺省）。模式按报文类型**方向性门控**（2026-10-19 实测矩阵）：本模式原生报文（绝对模式 0x04 / 相对模式 0x05）正常作用；跨模式报文被设备丢弃——相对模式下 0x04 无效，绝对模式下 0x05 无效**且不能释放按住的按钮**（fence 因此同时写两种零报文，绝对零报文取最后写入位置）。已知相对模式时，绝对工具在提交校验与每个报告处返回 `DEVICE_MOUSE_MODE`（不静默发无效包）；模式未知（查询未应答）时不阻塞绝对工具。切换是运行时事务（写模式 → 立即发新模式匹配零报文 → 重查校验，约 1 秒；省略零报文会把鼠标管线卡死，需设备重启解卡）。模式切换与设备重启是仅人工页面（本机入口）可触发的设备管理写（见第 3 节），agent 无对应工具。
 
 可执行输入工具等待作业结束，最大 30 秒；过程中桥继续处理续租、状态和 MCP 取消。失败返回 CallToolResult 的 `isError=true` 与机器可读错误，正常业务失败不伪装成成功文本。成功使用 `completion="written"`、报告数、已完成步数和 job_id；没有视觉确认。
 
@@ -64,14 +66,16 @@ relative 工具与既有绝对工具独立提供；绝对模式不兼容时可�
 | POST `/v1/ui/launch` | 独立 launcher bearer | 创建短期一次性打开 URL；供第二实例 `open` 使用，agent token 不允许调用 |
 | POST `/v1/session/heartbeat` | 已认证 | 延长会话活性，不隐式续控制 lease |
 | DELETE `/v1/session` | 已认证 | 清理自身会话并按 owner 状态释放/hold |
-| GET `/v1/state` | 已认证 | 当前 State，不包含任何 lease/token；设备未就绪时附 `serial_detail`/`video_detail`（有界脱敏原因，可选字段） |
+| GET `/v1/state` | 已认证 | 当前 State，不包含任何 lease/token；设备未就绪时附 `serial_detail`/`video_detail`（有界脱敏原因，可选字段）；已知设备坐标模式时附 `device_mouse_mode`（可选字段） |
 | GET `/v1/network` | 已认证 | 无密钥的网络状态：enabled、key_configured、generation、reason（disabled/key_missing/bind_error）、实际本机地址列表与端口；永不回显 key |
-| GET `/v1/status` | 已认证 | StatusResponse，包含 State 与当前可用工具名称 capabilities |
+| GET `/v1/status` | 已认证 | StatusResponse，包含 State 与当前可用工具名称 capabilities；有设备信息回执时附脱敏 `device` 块（坐标模式/固件/硬件/引导版本/温度/run_state/视频低功耗/USB VID/PID，不含序列号、路径或令牌） |
 | POST `/v1/control/acquire` | agent | `{request_id,ttl_ms}`，返回私有 Lease + State |
 | POST `/v1/control/renew` | lease owner | `{request_id,lease,ttl_ms}`，返回新 expires_in_ms |
 | POST `/v1/control/release` | agent owner | `{request_id,lease}`，fence 完成后返回 State |
 | POST `/v1/control/takeover` | human | `{request_id}`；完成屏障后返回新 Lease + State |
 | POST `/v1/control/handback` | 允许交还的 human | `{request_id}`；完成屏障后返回 State |
+| POST `/v1/device/mouse-mode` | human 页面（cookie+page+CSRF），仅本机入口 | `{mode:"absolute"\|"relative"}` 运行时切换（厂商 webapp 同款时序，实机验证 2026-10-19）：写模式（校验 kind 0 回执）→ **立即**经同一写线程发送新模式匹配的零报文（缺这步会把设备鼠标管线卡死，两类报文均被丢弃直至设备重启）→ 重发只读查询并校验模式；全程约 1 秒、无需重启。返回 `{mouse_mode,state,device?}`。LAN 路由表不包含此端点，agent 无对应工具 |
+| POST `/v1/device/restart` | human 页面（cookie+page+CSRF），仅本机入口 | 无请求字段。写厂商同款重启命令（channel=1/kind=10/`[1,0,0,0]`）→ 断开本机串口 → 等待 supervisor 按原身份重连恢复；返回 `{restarted:true,state}`。串口/视频可能同时重枚举，租约按状态机回收 |
 | POST `/v1/commands` | 有效 owner | CommandEnvelope，成功 202 返回 job_id；不代表已写入 |
 | GET `/v1/jobs/{job_id}` | 本 session | Job；其他 session 查询返回 404，防止泄漏 |
 | POST `/v1/jobs/{job_id}/cancel` | 本 session | `{request_id}`；返回当前 Job 状态 |
@@ -104,7 +108,7 @@ input 只接受 JSON text HumanInputEnvelope：api_version、sequence、lease、
 
 v1 增量还允许人工专用 `mouse_relative_state`：`dx,dy` 各为 -127–127 整数，`buttons` 为完整位掩码 0–7，`wheel=0` 为 -127–127 整数。每条对应一个相对报告；不接受 basis/x/y，不创建持久作业。agent 无权调用该持久状态动作。服务端不静默丢弃已接收的相对报告；队列满时明确拒绝并将人工 owner fence 到 human_hold，避免静默丢弃抬起事件。浏览器可以在分配 sequence 前采样、合并和压缩纯移动。
 
-人工页面默认 relative，可通过模式下拉框选择路径；仅将鼠标模式偏好保存在 localStorage。relative 下接管后点击画面请求 Pointer Lock，第一次捕获手势不传给目标。Esc/退出捕获、模式切换在同一有序 input 流发送键盘与鼠标零状态，保留租约；再次点击画面即可捕获。失焦、隐藏、输入断连仍撤销输入并保留人工 latch，页面在 human_hold 同时提供“接管”和“交还”。不写固件配置，不自动抢占 agent。
+人工页面输入映射默认 absolute（厂商默认，单屏目标），并随 `device_mouse_mode` 自动对齐；可通过模式下拉框改回 relative，仅将偏好保存在 localStorage。relative 下接管后点击画面请求 Pointer Lock，第一次捕获手势不传给目标。Esc/退出捕获、模式切换在同一有序 input 流发送键盘与鼠标零状态，保留租约；再次点击画面即可捕获。失焦、隐藏、输入断连仍撤销输入并保留人工 latch，页面在 human_hold 同时提供“接管”和“交还”。设备坐标模式切换（工具栏“设备鼠标”按钮）是显式设备配置写，仅本机入口可达。
 
 相对 mousemove 在页面按 16ms 采样，发送窗口最多保留 4 条等待终态回执的报告；只有 written/coalesced/rejected 回收窗口，accepted 不代表串口写完。窗口满时合并相同按钮状态、无滚轮的连续移动；待发的一段纯移动向量最多保留每轴 254 计数（按比例压缩，最多两条 HID 报告）。饱和后的反向输入优先表达新方向；最后更新超过 50ms 的未发送纯移动会过期。正常未过载位移保留计数，过载不承诺全部计数补发，也不因纯移动饱和而断开输入或撤销人工租约。
 
@@ -161,6 +165,7 @@ Job 状态为 accepted/running/written/cancelled/failed。terminal=true 当且�
 | CONTROL_REVOKED / LEASE_EXPIRED | 清除本地 lease，停止旧任务，重新观察 |
 | INSTANCE_CHANGED | 清除 lease、basis、job cache；新会话重新连接 |
 | DEVICE_UNAVAILABLE / DEVICE_AMBIGUOUS | 重连选定设备或人工选择，禁止回退其他设备 |
+| DEVICE_MOUSE_MODE | 设备坐标模式为相对，绝对报文被设备丢弃；等待人工切回绝对或改用相对工具，不重试绝对动作 |
 | VIDEO_STALE / VIDEO_UNAVAILABLE / FRAME_TIMEOUT | 不使用旧截图假装成功 |
 | STALE_BASIS / COORDINATE_OUT_OF_BOUNDS | 获取新截图并重新定位 |
 | INPUT_LIMIT / UNSUPPORTED_KEY / UNSUPPORTED_TEXT | 修正输入，保证在首包前失败 |

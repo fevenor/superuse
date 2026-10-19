@@ -42,6 +42,12 @@
     "valid": true
   },
   {
+    "name": "state-device-mode-relative",
+    "definition": "State",
+    "file": "state-device-mode-relative.json",
+    "valid": true
+  },
+  {
     "name": "acquire",
     "definition": "AcquireRequest",
     "file": "acquire.json",
@@ -234,6 +240,12 @@
     "valid": true
   },
   {
+    "name": "status-response-device",
+    "definition": "StatusResponse",
+    "file": "status-response-device.json",
+    "valid": true
+  },
+  {
     "name": "relative_move",
     "file": "relative_move.json",
     "definition": "Action",
@@ -291,6 +303,12 @@
     "name": "relative_scroll_zero",
     "file": "relative_scroll_zero.json",
     "definition": "Action",
+    "valid": false
+  },
+  {
+    "name": "invalid-device-mouse-mode",
+    "definition": "State",
+    "file": "invalid-device-mouse-mode.json",
     "valid": false
   }
 ]
