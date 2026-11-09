@@ -27,6 +27,7 @@ class SerialPortInfo:
     pid: int
     serial_number: str
     description: str = ""
+    location: str = ""
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,7 @@ class VideoDeviceInfo:
 
 
 def match_serial_port(
-    ports: list[SerialPortInfo], *, vid: int, pid: int, serial_number: str = ""
+    ports: list[SerialPortInfo], *, vid: int, pid: int, serial_number: str = "", location: str = ""
 ) -> SerialPortInfo:
     """Find the unique port matching the configured identity.
 
@@ -51,6 +52,8 @@ def match_serial_port(
     candidates = [p for p in ports if p.vid == vid and p.pid == pid]
     if serial_number:
         candidates = [p for p in candidates if p.serial_number == serial_number]
+    elif location:
+        candidates = [p for p in candidates if p.location == location]
     if not candidates:
         raise ControlError(
             ErrorCode.DEVICE_UNAVAILABLE,
@@ -67,7 +70,13 @@ def match_serial_port(
 
 
 def match_video_device(
-    cameras: list[VideoDeviceInfo], *, backend: str, name: str, device_path: str = ""
+    cameras: list[VideoDeviceInfo],
+    *,
+    backend: str,
+    name: str,
+    device_path: str = "",
+    vid: int | None = None,
+    pid: int | None = None,
 ) -> VideoDeviceInfo:
     """Find the unique capture device for the requested backend.
 
@@ -75,6 +84,10 @@ def match_video_device(
     inside the backend's own enumeration. No builtin-camera fallback.
     """
     candidates = [c for c in cameras if c.backend == backend and c.name == name]
+    if vid is not None:
+        candidates = [c for c in candidates if c.vid == vid]
+    if pid is not None:
+        candidates = [c for c in candidates if c.pid == pid]
     if device_path:
         candidates = [c for c in candidates if c.device_path == device_path]
     if not candidates:
@@ -103,6 +116,7 @@ def list_serial_ports() -> list[SerialPortInfo]:
             pid=p.pid or 0,
             serial_number=p.serial_number or "",
             description=p.description or "",
+            location=p.location or "",
         )
         for p in serial.tools.list_ports.comports()
     ]

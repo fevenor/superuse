@@ -108,7 +108,9 @@ async def lan_page_takeover(broker: Broker, ports: Ports) -> dict:
             grant = await response.json()
         headers["X-Superuse-Page"] = grant["page_token"]
         async with http.post(
-            f"{base}/v1/control/takeover", json={"request_id": "1" * 36}, headers=headers
+            f"{base}/v1/control/takeover",
+            json={"request_id": "11111111-1111-4111-8111-111111111111"},
+            headers=headers,
         ) as response:
             assert response.status == 200
             return await response.json()

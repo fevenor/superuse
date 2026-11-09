@@ -310,5 +310,23 @@
     "definition": "State",
     "file": "invalid-device-mouse-mode.json",
     "valid": false
+  },
+  {
+    "name": "device-action-power",
+    "file": "device-action-power.json",
+    "definition": "DeviceActionRequest",
+    "valid": true
+  },
+  {
+    "name": "device-action-calibration",
+    "file": "device-action-calibration.json",
+    "definition": "DeviceActionRequest",
+    "valid": true
+  },
+  {
+    "name": "device-action-raw-rejected",
+    "file": "device-action-raw-rejected.json",
+    "definition": "DeviceActionRequest",
+    "valid": false
   }
 ]

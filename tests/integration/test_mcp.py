@@ -129,6 +129,49 @@ async def test_i03_all_tools_over_official_client(broker):
             assert any(str(r.uri) == "superuse://state" for r in resources.resources)
 
 
+@pytest.mark.parametrize("mode,raw", [("relative", 1), ("absolute", 2)])
+async def test_keyboard_only_release_does_not_guess_mouse_mode_or_position(broker, mode, raw):
+    broker.actor._mouse_mode_raw = raw
+    broker.manager.set_device_mouse_mode(mode)
+    async with await open_bridge(broker, "keyboard-release") as streams:
+        async with ClientSession(*streams) as session:
+            await session.initialize()
+            assert not (await call_tool(session, "acquire_control")).is_error
+            assert not (await call_tool(session, "press_key", {"code": "KeyA"})).is_error
+            before = len(broker.actor._transport.writes)
+            result = await call_tool(session, "release_inputs")
+            assert not result.is_error, text_of(result)
+            assert json.loads(text_of(result))["completion"] == "written"
+            writes = broker.actor._transport.writes[before:]
+            assert len(writes) == 1
+            assert writes[0][3] == 2
+            assert broker.manager.current_lease is not None
+
+
+async def test_mcp_text_chunks_and_progress(broker):
+    broker.scheduler._action_timeout_s = 2.5
+    async with await open_bridge(broker, "chunked-text") as streams:
+        async with ClientSession(*streams) as session:
+            await session.initialize()
+            await call_tool(session, "acquire_control")
+            progress = []
+
+            async def observed(done, total, message):
+                progress.append((done, total))
+
+            text = "a" * 512
+            result = await session.call_tool(
+                "type_text", {"text": text, "char_interval_ms": 10}, progress_callback=observed
+            )
+            assert not result.is_error, text_of(result)
+            payload = json.loads(text_of(result))
+            assert payload["characters_written"] == 512
+            assert payload["reports_written"] == 1024
+            assert payload["chunks_completed"] == 8
+            assert len(set(payload["job_ids"])) == 8
+            assert progress == [(count, 512) for count in range(64, 513, 64)]
+
+
 async def test_i04_two_bridges_share_one_broker(broker):
     async with (
         await open_bridge(broker, "agent-a") as streams_a,

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "superuse"
-version = "0.1.0.dev0"
+version = "0.2.0"
 description = "Windows SuperKVM application with a shared human interface and MCP control"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -57,7 +57,7 @@ include = [
     "/third_party/licenses", "/third_party/upstream-lock.json", "/third_party/CHANGES.md",
     "/third_party/runtime-licenses.json",
     "/README.md", "/DESIGN.md", "/AGENTS.md", "/CONTRIBUTING.md", "/SECURITY.md",
-    "/NOTICE.md", "/LICENSE", "/config.example.toml", "/pyproject.toml", "/uv.lock",
+    "/NOTICE.md", "/LICENSE", "/CHANGELOG.md", "/config.example.toml", "/pyproject.toml", "/uv.lock",
     "/.python-version",
 ]
 

@@ -281,7 +281,10 @@
           "description": "Why the video device is not ready."
         },
         "device_mouse_mode": {
-          "enum": ["absolute", "relative"],
+          "enum": [
+            "absolute",
+            "relative"
+          ],
           "description": "Device-side persisted mouse coordinate mode from the last device-info reply; omitted while unknown. The device gates absolute (0x04) reports in relative mode."
         }
       },
@@ -437,7 +440,10 @@
       "description": "Sanitized summary of the last device-info reply; absent while no reply has landed (simulated source). Never carries serial numbers, device paths or tokens.",
       "properties": {
         "mouse_mode": {
-          "enum": ["absolute", "relative"]
+          "enum": [
+            "absolute",
+            "relative"
+          ]
         },
         "mouse_mode_raw": {
           "type": "integer",
@@ -1093,6 +1099,15 @@
         },
         "mime_type": {
           "const": "image/jpeg"
+        },
+        "active_rect": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       }
     },
@@ -1401,6 +1416,12 @@
                 "real"
               ]
             },
+            "type": {
+              "enum": [
+                "superkvm",
+                "ch9329"
+              ]
+            },
             "serial": {
               "type": "object",
               "additionalProperties": false,
@@ -1414,17 +1435,44 @@
               ],
               "properties": {
                 "vid": {
-                  "const": 4617
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
                 },
                 "pid": {
-                  "const": 1
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
                 },
                 "serial_number": {
                   "type": "string",
-                  "maxLength": 256
+                  "maxLength": 2048
+                },
+                "location": {
+                  "type": "string",
+                  "maxLength": 2048
                 },
                 "baud": {
-                  "const": 2000000
+                  "enum": [
+                    9600,
+                    14400,
+                    19200,
+                    28800,
+                    38400,
+                    56000,
+                    57600,
+                    76800,
+                    115200,
+                    128000,
+                    153600,
+                    230400,
+                    256000,
+                    460800,
+                    500000,
+                    921600,
+                    1000000,
+                    2000000
+                  ]
                 },
                 "read_timeout_ms": {
                   "type": "integer",
@@ -1454,17 +1502,23 @@
               ],
               "properties": {
                 "vid": {
-                  "const": 13407
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
                 },
                 "pid": {
-                  "const": 8497
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65535
                 },
                 "name": {
-                  "const": "SK USB3 Video"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
                 },
                 "device_path": {
                   "type": "string",
-                  "maxLength": 4096
+                  "maxLength": 2048
                 },
                 "backend": {
                   "enum": [
@@ -1491,6 +1545,18 @@
                   "const": false
                 }
               }
+            }
+          }
+        },
+        "power": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "keep_awake"
+          ],
+          "properties": {
+            "keep_awake": {
+              "type": "boolean"
             }
           }
         },
@@ -1791,6 +1857,251 @@
           "maximum": 127
         }
       }
+    },
+    "DeviceActionRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "operation",
+            "value"
+          ],
+          "properties": {
+            "request_id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "operation": {
+              "const": "connection"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "device_type",
+                "baud",
+                "width",
+                "height",
+                "fps"
+              ],
+              "properties": {
+                "device_type": {
+                  "enum": [
+                    "superkvm",
+                    "ch9329"
+                  ]
+                },
+                "baud": {
+                  "enum": [
+                    9600,
+                    14400,
+                    19200,
+                    28800,
+                    38400,
+                    56000,
+                    57600,
+                    76800,
+                    115200,
+                    128000,
+                    153600,
+                    230400,
+                    256000,
+                    460800,
+                    500000,
+                    921600,
+                    1000000,
+                    2000000
+                  ]
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 320,
+                  "maximum": 3840
+                },
+                "height": {
+                  "type": "integer",
+                  "minimum": 200,
+                  "maximum": 2160
+                },
+                "fps": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
+                },
+                "serial_choice": {
+                  "type": "string"
+                },
+                "video_choice": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "operation",
+            "value"
+          ],
+          "properties": {
+            "request_id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "operation": {
+              "const": "refresh"
+            },
+            "value": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "operation",
+            "value"
+          ],
+          "properties": {
+            "request_id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "operation": {
+              "const": "keep_awake"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "operation",
+            "value"
+          ],
+          "properties": {
+            "request_id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "operation": {
+              "const": "video_low_power"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "operation",
+            "value"
+          ],
+          "properties": {
+            "request_id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "operation": {
+              "const": "mouse_auto_move"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "operation",
+            "value"
+          ],
+          "properties": {
+            "request_id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "operation": {
+              "const": "calibration_detect"
+            },
+            "value": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "operation",
+            "value"
+          ],
+          "properties": {
+            "request_id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "operation": {
+              "const": "calibration"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "operation",
+            "value"
+          ],
+          "properties": {
+            "request_id": {
+              "$ref": "#/$defs/RequestId"
+            },
+            "operation": {
+              "const": "logs"
+            },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "clear": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

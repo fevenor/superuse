@@ -187,7 +187,9 @@ async def test_packaged_real_mode_waits_for_device_and_rejects_simulated(tmp_pat
     # A legacy simulated config is MIGRATED to real (acceptance A3): the
     # release build runs and never starts a simulated device.
     simulated_config = tmp_path / "simulated.toml"
-    simulated_config.write_text('schema_version=1\n[device]\nmode="simulated"\n', encoding="utf-8")
+    simulated_config.write_text(
+        NO_HARDWARE_CONFIG.replace('mode = "real"', 'mode = "simulated"'), encoding="utf-8"
+    )
     migrated = await asyncio.create_subprocess_exec(
         str(TRAY_EXE),
         "serve",

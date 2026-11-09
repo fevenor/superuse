@@ -28,3 +28,13 @@ async def test_persisted_human_hold_is_a_healthy_startup(tmp_path):
         assert broker.manager.get_state().mode.value == "human_hold"
     finally:
         await broker.stop()
+
+
+async def test_settings_resource_is_served(broker, base_url):
+    import aiohttp
+
+    async with aiohttp.ClientSession() as http:
+        async with http.get(base_url + "/settings.js") as response:
+            assert response.status == 200
+            assert "javascript" in response.headers["Content-Type"]
+            assert "displayForm" in await response.text()

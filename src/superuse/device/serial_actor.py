@@ -14,9 +14,16 @@ import asyncio
 import logging
 import queue
 import threading
+import time
+from collections import deque
 from collections.abc import Callable
 
-from superuse.core.models import KEYBOARD_RELEASE, MOUSE_ZERO_RELEASE, MouseAbsReport
+from superuse.core.models import (
+    KEYBOARD_RELEASE,
+    MOUSE_ZERO_RELEASE,
+    MouseAbsReport,
+    MouseRelReport,
+)
 from superuse.core.ports import AuthorizedReport, FenceResult, FenceTicket, WriteOutcome
 from superuse.device.protocol import (
     EXT_GENERAL_REPLY_KIND,
@@ -29,6 +36,7 @@ from superuse.device.protocol import (
     build_mouse_mode_frame,
     encode_hid_report,
     parse_device_info,
+    parse_device_log,
     parse_general_reply,
 )
 from superuse.device.transport import SerialTransport, TransportClosed
@@ -55,6 +63,8 @@ class SerialActor:
         input_queue_limit: int = 128,
         on_status: Callable[[str], None] | None = None,
         on_device_info: Callable[[dict], None] | None = None,
+        validate_report: Callable[[AuthorizedReport], str | None] | None = None,
+        device_type: str = "superkvm",
     ) -> None:
         self._transport_factory = transport_factory
         self._loop = loop
@@ -62,6 +72,16 @@ class SerialActor:
         self._input_queue_limit = input_queue_limit
         self._on_status = on_status
         self._on_device_info = on_device_info
+        self._validate_report = validate_report
+        self.device_type = device_type
+        self.logs_enabled = False
+        self._logs = deque(maxlen=500)
+        self._logs_lock = threading.Lock()
+        self._log_sequence = 0
+        self.rx_bytes = 0
+        self.tx_bytes = 0
+        self.info_revision = 0
+        self.close_hung = False
 
         self._queue: queue.PriorityQueue = queue.PriorityQueue()
         self._seq = 0
@@ -107,8 +127,9 @@ class SerialActor:
         self._reader = threading.Thread(target=self._reader_loop, name="serial-reader", daemon=True)
         self._writer.start()
         self._reader.start()
-        self._heartbeat = self._loop.call_later(5.0, self._heartbeat_tick)
-        if query_device_info:
+        if self.device_type == "superkvm":
+            self._heartbeat = self._loop.call_later(5.0, self._heartbeat_tick)
+        if query_device_info and self.device_type == "superkvm":
             # One read-only query at init/recovery via the same controlled
             # path (docs/development/device-video.md §3); failure is tolerated.
 
@@ -140,6 +161,12 @@ class SerialActor:
         for thread in (self._writer, self._reader):
             if thread is not None:
                 thread.join(timeout=2.0)
+        self.close_hung = any(
+            thread is not None and thread.is_alive() for thread in (self._writer, self._reader)
+        )
+        if self.close_hung:
+            self._set_status("fault")
+            return
         self._writer = self._reader = None
         if self._transport is not None:
             try:
@@ -211,6 +238,8 @@ class SerialActor:
         lands before the loop resumes here. rsp_code 0 (or a silent timeout)
         returns ok; a non-zero rsp_code returns ``REJECTED:<code>``.
         """
+        if self.device_type != "superkvm":
+            return WriteOutcome(0, "UNSUPPORTED")
         _, _, future = item
         if self._stopping or self._status in ("fault", "disconnected"):
             return WriteOutcome(0, "CLOSED")
@@ -235,15 +264,18 @@ class SerialActor:
         return outcome
 
     async def set_mouse_mode(self, mode: int, *, reply_timeout_s: float = 0.5) -> WriteOutcome:
-        """User-authorized coordinate-mode write on the writer thread.
-
-        The stored setting changes immediately, but the mouse HID interface
-        only rebinds after a device restart (see :meth:`restart_device`); the
-        device-info query is re-sent after every accepted write so the reader
-        refreshes ``device_info`` and the reported mode follows the change.
-        """
+        """Write the mode and its matching neutral report as one writer item."""
+        info = self.device_info or {}
+        direction = info.get("mouse_scroll_direction_raw", 0)
+        sensitivity = info.get("mouse_sensitivity_raw", 1)
+        direction = direction if direction in (0, 1) else 0
+        sensitivity = sensitivity if type(sensitivity) is int and 1 <= sensitivity <= 255 else 1
         return await self._control_write(
-            ("mouse_mode", build_mouse_mode_frame(mode), self._loop.create_future()),
+            (
+                "mouse_mode",
+                build_mouse_mode_frame(mode, direction, sensitivity),
+                self._loop.create_future(),
+            ),
             reply_timeout_s=reply_timeout_s,
         )
 
@@ -265,6 +297,34 @@ class SerialActor:
             seq = self._seq
         self._queue.put((PRIORITY_INPUT, seq, payload))
 
+    async def set_setting(self, frame: bytes) -> WriteOutcome:
+        if (
+            len(frame) < 21
+            or frame[2] != 1
+            or int.from_bytes(frame[11:13], "little") not in (11, 15)
+        ):
+            raise ValueError("Unsupported device setting")
+        return await self._control_write(
+            ("setting", frame, self._loop.create_future()),
+            reply_timeout_s=0.3,
+        )
+
+    async def query_info(self) -> WriteOutcome:
+        if self.device_type != "superkvm":
+            return WriteOutcome(0, "UNSUPPORTED")
+        future = self._loop.create_future()
+        self._enqueue_control(
+            ("raw", build_device_info_query(), lambda result: self._complete(future, result))
+        )
+        return await future
+
+    def read_logs(self, *, clear: bool = False) -> list[dict]:
+        with self._logs_lock:
+            rows = list(self._logs)
+            if clear:
+                self._logs.clear()
+        return rows
+
     # ------------------------------------------------------------------
     # Writer thread
     # ------------------------------------------------------------------
@@ -283,6 +343,8 @@ class SerialActor:
                 elif kind == "raw":
                     self._process_raw(payload)
                 elif kind == "mouse_mode":
+                    self._process_mouse_mode(payload)
+                elif kind == "setting":
                     self._process_mouse_mode(payload)
                 elif kind == "device_restart":
                     self._process_device_restart(payload)
@@ -306,18 +368,28 @@ class SerialActor:
         if transport is None:
             raise TransportClosed("actor not started")
         n = transport.write_report(data, self._write_timeout_s)
+        self.tx_bytes += n
         if n < len(data):
             raise ShortWrite(n)
         return n
 
     def _process_report(self, payload) -> None:
         _, report, future = payload
+        if self._validate_report is not None:
+            error = self._validate_report(report)
+            if error is not None:
+                self._complete(future, WriteOutcome(0, error))
+                return
         if report.generation < self._generation:
             self._complete(future, WriteOutcome(0, "REVOKED"))
             return
         if (
             isinstance(report.report, MouseAbsReport)
             and self._mouse_mode_raw == MOUSE_MODE_RELATIVE
+        ) or (
+            isinstance(report.report, MouseRelReport)
+            and self._mouse_mode_raw == 2
+            and not report.priority
         ):
             # Final executor-side gate: the device silently drops absolute
             # reports while its persisted coordinate mode is relative, so a
@@ -387,6 +459,14 @@ class SerialActor:
         _, data, future = payload
         try:
             self._write_bytes(data)
+            if payload[0] == "mouse_mode":
+                mode = data[17]
+                zero = (
+                    MouseRelReport(0, 0, 0, 0)
+                    if mode == 1
+                    else MouseAbsReport(0, self._last_abs_x, self._last_abs_y, 0)
+                )
+                self._write_bytes(encode_hid_report(zero))
         except TimeoutError:
             self._set_status("fault")
             self._complete(future, WriteOutcome(0, "TIMEOUT"))
@@ -439,11 +519,13 @@ class SerialActor:
                 return
             if not chunk:
                 continue
+            self.rx_bytes += len(chunk)
             for frame in parser.feed(chunk):
                 if not frame.checksum_ok:
                     continue
-                if frame.kind == EXT_INFO_KIND:
+                if frame.kind == EXT_INFO_KIND and frame.channel == 1:
                     self.device_info = parse_device_info(frame.payload)
+                    self.info_revision += 1
                     raw = self.device_info.get("mouse_coordinate_mode_raw")
                     self._mouse_mode_raw = raw if isinstance(raw, int) else None
                     if self._on_device_info is not None:
@@ -452,6 +534,14 @@ class SerialActor:
                             self._loop.call_soon_threadsafe(callback, info)
                         except RuntimeError:  # loop closed during shutdown
                             pass
+                elif frame.channel == 5 and frame.kind == 1 and self.logs_enabled:
+                    row = parse_device_log(frame.payload)
+                    if row is not None:
+                        with self._logs_lock:
+                            self._log_sequence += 1
+                            self._logs.append(
+                                {**row, "sequence": self._log_sequence, "received_at": time.time()}
+                            )
                 elif frame.kind == EXT_GENERAL_REPLY_KIND and frame.channel == EXT_QUERY_CHANNEL:
                     reply = parse_general_reply(frame.payload)
                     pending = self._pending_ext_reply

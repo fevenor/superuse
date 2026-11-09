@@ -121,6 +121,8 @@ def prepare_release(bundle: Path, stage: Path) -> None:
         shutil.copy2(ROOT / name, stage / name)
     shutil.copy2(ROOT / "packaging/PORTABLE.md", stage / "PORTABLE.md")
     shutil.copy2(ROOT / "packaging/MCP.md", stage / "MCP.md")
+    shutil.copy2(ROOT / "docs/device-settings.md", stage / "DEVICE-SETTINGS.md")
+    shutil.copy2(ROOT / "docs/release-0.2.0.md", stage / "RELEASE-NOTES.md")
     for name in ("mcp-client.example.json", "mcp-client-http.example.json"):
         shutil.copy2(ROOT / "examples" / name, stage / name)
     # Empty directory is the mode selector; never ship a user's configuration,

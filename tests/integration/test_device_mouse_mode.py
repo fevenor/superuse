@@ -8,6 +8,7 @@ body validation, simulated-source rejection and the state field.
 from __future__ import annotations
 
 import time
+import uuid
 
 import pytest
 
@@ -30,26 +31,34 @@ async def test_mouse_mode_endpoint_auth_and_validation(broker, base_url):
     async with aiohttp.ClientSession() as http:
         # Simulated source has no device mouse mode: explicit, not a write.
         async with http.post(
-            f"{base_url}/v1/device/mouse-mode", json={"mode": "absolute"}, headers=headers
+            f"{base_url}/v1/device/mouse-mode",
+            json={"request_id": str(uuid.uuid4()), "mode": "absolute"},
+            headers=headers,
         ) as response:
             assert response.status == 400
             body = await response.json()
             assert body["error"]["code"] == "INVALID_REQUEST"
 
         async with http.post(
-            f"{base_url}/v1/device/mouse-mode", json={"mode": "pixel"}, headers=headers
+            f"{base_url}/v1/device/mouse-mode",
+            json={"request_id": str(uuid.uuid4()), "mode": "pixel"},
+            headers=headers,
         ) as response:
             assert response.status == 400
 
         no_csrf = {k: v for k, v in headers.items() if k != "X-CSRF-Token"}
         async with http.post(
-            f"{base_url}/v1/device/mouse-mode", json={"mode": "absolute"}, headers=no_csrf
+            f"{base_url}/v1/device/mouse-mode",
+            json={"request_id": str(uuid.uuid4()), "mode": "absolute"},
+            headers=no_csrf,
         ) as response:
             assert response.status == 403
 
         no_auth = {}
         async with http.post(
-            f"{base_url}/v1/device/mouse-mode", json={"mode": "absolute"}, headers=no_auth
+            f"{base_url}/v1/device/mouse-mode",
+            json={"request_id": str(uuid.uuid4()), "mode": "absolute"},
+            headers=no_auth,
         ) as response:
             assert response.status == 401
 
@@ -137,13 +146,17 @@ async def test_restart_endpoint_and_lan_exclusion(broker, base_url):
     page = await browser_page(base_url, broker.sessions.issue_bootstrap(_time.monotonic()))
     headers = _headers(page)
     async with aiohttp.ClientSession() as http:
-        async with http.post(f"{base_url}/v1/device/restart", json={}, headers=headers) as response:
+        async with http.post(
+            f"{base_url}/v1/device/restart", json={"request_id": str(uuid.uuid4())}, headers=headers
+        ) as response:
             assert response.status == 400  # simulated source has no device
             body = await response.json()
             assert body["error"]["code"] == "INVALID_REQUEST"
 
         no_csrf = {k: v for k, v in headers.items() if k != "X-CSRF-Token"}
-        async with http.post(f"{base_url}/v1/device/restart", json={}, headers=no_csrf) as response:
+        async with http.post(
+            f"{base_url}/v1/device/restart", json={"request_id": str(uuid.uuid4())}, headers=no_csrf
+        ) as response:
             assert response.status == 403
 
     from superuse.server.lan import LanApi
@@ -165,6 +178,20 @@ async def test_broker_restart_flow_on_simulated_transport(broker, monkeypatch):
     """Full restart flow on the simulated transport: write -> handle cycle ->
     supervisor re-attach -> healthy again (mode stays unknown: simulated)."""
 
+    build_serial = broker._build_serial
+
+    def simulated_factory():
+        with monkeypatch.context() as patch:
+            patch.setitem(broker.config.raw["device"], "mode", "simulated")
+            transport, actor = build_serial()
+        from superuse.device.protocol import build_ext_frame
+
+        info = bytearray(36)
+        info[25] = 2
+        transport.queue_response(build_ext_frame(1, 0x81, bytes(info)))
+        return transport, actor
+
+    monkeypatch.setattr(broker, "_build_serial", simulated_factory)
     monkeypatch.setitem(broker.config.raw["device"], "mode", "real")
     old_actor = broker.actor
     state = await broker.restart_device()

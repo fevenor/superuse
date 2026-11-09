@@ -9,10 +9,11 @@ reused while the key stays valid; entries are LRU-bounded and expire after
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from superuse.core.errors import ControlError, ErrorCode
@@ -30,6 +31,7 @@ class Basis:
     image_height: int
     native_width: int
     native_height: int
+    active_rect: tuple[int, int, int, int] | None = None
 
 
 class BasisRegistry:
@@ -52,6 +54,7 @@ class BasisRegistry:
         native_width: int,
         native_height: int,
         now: float,
+        active_rect: tuple[int, int, int, int] | None = None,
     ) -> Basis:
         """Return the basis for this key, creating or refreshing it."""
         key = self.key(capture_generation, geometry_id, image_width, image_height)
@@ -70,6 +73,7 @@ class BasisRegistry:
             image_height=image_height,
             native_width=native_width,
             native_height=native_height,
+            active_rect=active_rect,
         )
         self._insert(basis, now)
         return basis
@@ -163,6 +167,14 @@ def image_to_hid(value: float, image_size: int, what: str) -> int:
 
 def map_point(basis: Basis, x: float, y: float) -> tuple[int, int]:
     """Image-pixel point -> HID absolute coordinates for this basis."""
+    if basis.active_rect is not None:
+        image_to_hid(x, basis.image_width, "x")
+        image_to_hid(y, basis.image_height, "y")
+        left, top, width, height = basis.active_rect
+        return (
+            image_to_hid(x * basis.native_width / basis.image_width - left, width, "x"),
+            image_to_hid(y * basis.native_height / basis.image_height - top, height, "y"),
+        )
     return (
         image_to_hid(x, basis.image_width, "x"),
         image_to_hid(y, basis.image_height, "y"),
@@ -220,6 +232,9 @@ class FrameHub:
         self._new_frame_event: Any = None
         self._encode_cache: OrderedDict[tuple[int, int, int], bytes] = OrderedDict()
         self._cv2 = None
+        self._encoding_lock = asyncio.Lock()
+        self._encoding_waiters = 0
+        self.active_rect: tuple[int, int, int, int] | None = None
 
     # -- publish --------------------------------------------------------------
 
@@ -237,6 +252,7 @@ class FrameHub:
         self._capture_generation += 1
         self._geometry_id = None
         self._frame = None
+        self.active_rect = None
         return self._capture_generation
 
     def publish(self, frame) -> bool:
@@ -249,6 +265,7 @@ class FrameHub:
             frame.height,
         )
         if changed:
+            self.active_rect = None
             self._geometry_id = str(_uuid.uuid4())
             if previous is not None:
                 self._bases.invalidate_generation(self._capture_generation)
@@ -283,6 +300,71 @@ class FrameHub:
 
     # -- snapshots ------------------------------------------------------------
 
+    def set_active_rect(self, rect: list[int] | None) -> None:
+        frame = self._frame
+        if frame is None:
+            raise ControlError(ErrorCode.VIDEO_UNAVAILABLE, "No frame available")
+        if rect is not None:
+            if (
+                not isinstance(rect, list)
+                or len(rect) != 4
+                or any(type(v) is not int for v in rect)
+            ):
+                raise ControlError(ErrorCode.INVALID_REQUEST, "Expected [left, top, width, height]")
+            left, top, width, height = rect
+            if (
+                min(left, top) < 0
+                or min(width, height) < 16
+                or left + width > frame.width
+                or top + height > frame.height
+            ):
+                raise ControlError(
+                    ErrorCode.INVALID_REQUEST, "Calibration rectangle outside capture"
+                )
+        self.active_rect = tuple(rect) if rect else None
+        self._bases.invalidate_generation(self._capture_generation)
+        self._geometry_id = str(uuid.uuid4())
+        self._frame = replace(frame, geometry_id=self._geometry_id)
+
+    async def png_snapshot(self, *, freshness_s: float) -> bytes:
+        import time
+
+        if self._encoding_waiters >= 8:
+            raise ControlError(ErrorCode.INPUT_BACKPRESSURE, "Too many snapshot requests")
+        self._encoding_waiters += 1
+        try:
+            async with self._encoding_lock:
+                frame = self._frame
+                if frame is None or time.monotonic() - frame.monotonic > freshness_s:
+                    raise FrameTimeout("No fresh frame for screenshot")
+                task = asyncio.create_task(asyncio.to_thread(self._encode_png, frame))
+                try:
+                    data = await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    await task
+                    raise
+                if (
+                    frame.capture_generation != self._capture_generation
+                    or time.monotonic() - frame.monotonic > freshness_s
+                ):
+                    raise FrameTimeout("Capture changed while encoding screenshot")
+                return data
+        finally:
+            self._encoding_waiters -= 1
+
+    def _encode_png(self, frame) -> bytes:
+        import numpy as np
+
+        cv2 = self._load_cv2()
+        if frame.fmt == "bgr":
+            image = np.frombuffer(frame.data, dtype=np.uint8).reshape(frame.height, frame.width, 3)
+        else:
+            image = cv2.imdecode(np.frombuffer(frame.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        ok, data = cv2.imencode(".png", image, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+        if not ok:
+            raise ControlError(ErrorCode.VIDEO_UNAVAILABLE, "PNG encoding failed")
+        return data.tobytes()
+
     async def snapshot(
         self,
         *,
@@ -309,7 +391,14 @@ class FrameHub:
                 fresh = (now() - frame.monotonic) <= freshness_s
                 newer = after_frame_id is None or frame.frame_id > after_frame_id
                 if fresh and newer:
-                    return self._build_snapshot(frame, width_limit, now())
+                    result = await self.publish_snapshot_async(
+                        now=now,
+                        freshness_s=freshness_s,
+                        max_width=width_limit,
+                        after_frame_id=after_frame_id,
+                    )
+                    if result is not None:
+                        return result
             remaining = deadline - loop.time()
             if remaining <= 0:
                 raise FrameTimeout("No fresh frame within the wait budget")
@@ -318,6 +407,49 @@ class FrameHub:
                 await asyncio.wait_for(event.wait(), timeout=remaining)
             except TimeoutError:
                 raise FrameTimeout("No fresh frame within the wait budget") from None
+
+    async def publish_snapshot_async(
+        self,
+        *,
+        now: Callable[[], float],
+        freshness_s: float,
+        max_width: int | None = None,
+        jpeg_quality: int | None = None,
+        after_frame_id: int | None = None,
+    ) -> tuple[dict, bytes] | None:
+        if self._encoding_waiters >= 8:
+            raise ControlError(ErrorCode.INPUT_BACKPRESSURE, "Too many snapshot requests")
+        self._encoding_waiters += 1
+        try:
+            async with self._encoding_lock:
+                frame = self._frame
+                if frame is None or now() - frame.monotonic > freshness_s:
+                    return None
+                if after_frame_id is not None and frame.frame_id <= after_frame_id:
+                    return None
+                width = max_width or self._snapshot_max_width
+                task = asyncio.create_task(
+                    asyncio.to_thread(
+                        self._encode,
+                        frame,
+                        width,
+                        jpeg_quality=jpeg_quality,
+                    )
+                )
+                try:
+                    jpeg = await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    await task
+                    raise
+                if (
+                    frame.capture_generation != self._capture_generation
+                    or frame.geometry_id != self._geometry_id
+                    or now() - frame.monotonic > freshness_s
+                ):
+                    return None
+                return self._build_snapshot(frame, width, now(), jpeg=jpeg)
+        finally:
+            self._encoding_waiters -= 1
 
     def publish_snapshot(
         self,
@@ -342,10 +474,12 @@ class FrameHub:
         now: float,
         *,
         jpeg_quality: int | None = None,
+        jpeg: bytes | None = None,
     ) -> tuple[dict, bytes]:
         import time as _time
 
-        jpeg = self._encode(frame, width_limit, jpeg_quality=jpeg_quality)
+        if jpeg is None:
+            jpeg = self._encode(frame, width_limit, jpeg_quality=jpeg_quality)
         image_width = min(frame.width, width_limit)
         image_height = max(1, round(frame.height * image_width / frame.width))
         basis = self._bases.register(
@@ -356,6 +490,7 @@ class FrameHub:
             native_width=frame.width,
             native_height=frame.height,
             now=now,
+            active_rect=self.active_rect,
         )
         metadata = {
             "api_version": 1,
@@ -373,6 +508,8 @@ class FrameHub:
             "age_ms": max(0.0, (_time.monotonic() - frame.monotonic) * 1000),
             "mime_type": "image/jpeg",
         }
+        if self.active_rect is not None:
+            metadata["active_rect"] = list(self.active_rect)
         return metadata, jpeg
 
     # -- encoding ---------------------------------------------------------------

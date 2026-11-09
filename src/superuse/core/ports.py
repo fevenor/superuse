@@ -29,6 +29,8 @@ class AuthorizedReport:
     generation: int
     report: InputReport
     priority: bool = False  # control-plane reports bypass the input queue
+    instance_id: str = ""
+    deadline: float = float("inf")
 
 
 @dataclass(frozen=True)

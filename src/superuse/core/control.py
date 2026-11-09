@@ -110,6 +110,7 @@ class ControlManager:
         self._subscribers: list[asyncio.Queue[StateEvent]] = []
         self._cancel_hook: OwnerCancelHook | None = None
         self._stopping = False
+        self._write_authority: tuple | None = None
 
     # ------------------------------------------------------------------
     # Wiring and introspection
@@ -170,6 +171,7 @@ class ControlManager:
             self._subscribers.remove(queue)
 
     def _publish(self, reason: str) -> None:
+        self._refresh_write_authority()
         self._revision += 1
         logger.info(
             "control mode=%s generation=%s reason=%s",
@@ -206,6 +208,7 @@ class ControlManager:
 
     def set_serial_status(self, status: DeviceStatus) -> None:
         self._serial_status = status
+        self._refresh_write_authority()
         if status is not DeviceStatus.READY:
             # The mode came from the previous actor's device-info reply; the
             # replacement actor re-queries, so unknown must not linger stale.
@@ -240,6 +243,7 @@ class ControlManager:
 
     def set_video_status(self, status: DeviceStatus) -> None:
         self._video_status = status
+        self._refresh_write_authority()
         if status is DeviceStatus.FAULT:
             self._enter_recovery("video_fault")
 
@@ -251,8 +255,62 @@ class ControlManager:
         """Detail changes are state revisions so subscribers re-render hints."""
         self._publish(reason)
 
-    def frame_received(self) -> None:
-        self._last_frame = self._clock.now
+    def frame_received(self, captured_monotonic: float | None = None) -> None:
+        captured = self._clock.now if captured_monotonic is None else captured_monotonic
+        if captured <= self._clock.now and (
+            self._last_frame is None or captured > self._last_frame
+        ):
+            self._last_frame = captured
+            self._refresh_write_authority()
+
+    def _refresh_write_authority(self) -> None:
+        if (
+            self._stopping
+            or self._mode not in (Mode.AGENT, Mode.HUMAN)
+            or self._lease is None
+            or self._owner is None
+        ):
+            self._write_authority = None
+            return
+        self._write_authority = (
+            self.instance_id,
+            self._owner.session_id,
+            self._lease.lease.lease_id,
+            self._generation,
+            self._lease.expires_at,
+            (self._last_frame + self._freshness_s) if self._last_frame is not None else 0,
+            self._serial_status is DeviceStatus.READY,
+        )
+
+    def validate_report(self, report) -> str | None:
+        authority = self._write_authority
+        if authority is None:
+            return "REVOKED"
+        instance, session, lease, generation, expires, fresh_until, ready = authority
+        if (report.instance_id, report.session_id, report.lease_id, report.generation) != (
+            instance,
+            session,
+            lease,
+            generation,
+        ):
+            return "REVOKED"
+        now = self._clock.now
+        if now >= expires:
+            return "LEASE_EXPIRED"
+        if now >= report.deadline:
+            return "ACTION_TIMEOUT"
+        if not ready:
+            return "DEVICE_UNAVAILABLE"
+        if not report.priority and now > fresh_until:
+            return "VIDEO_STALE"
+        return None
+
+    def check_relative_mouse(self) -> None:
+        if self._mouse_mode == "absolute":
+            raise ControlError(
+                ErrorCode.DEVICE_MOUSE_MODE,
+                "Device mouse mode is absolute; use absolute actions or switch device mode",
+            )
 
     def geometry_changed(self) -> None:
         """Resolution/source change: revoke and re-observe (docs §6)."""
@@ -582,7 +640,22 @@ class ControlManager:
             raise ControlError(ErrorCode.LEASE_EXPIRED, "Lease already expired")
         ttl_s = (ttl_ms / 1000) if ttl_ms else self._lease_ttl_s
         record.expires_at = self._clock.now + ttl_s
+        self._refresh_write_authority()
         return record.expires_in_ms(self._clock.now)
+
+    async def suspend_device(self) -> None:
+        self._reject_stopping()
+        if self._mode is Mode.TRANSITION:
+            raise ControlError(ErrorCode.CONTROL_BUSY, "Control transition in progress")
+        if self._serial_status is not DeviceStatus.READY:
+            self._enter_recovery("device_management")
+            return
+        ticket = self._begin_barrier("device_management")
+        result = await self._await_barrier(ticket, "device_management")
+        self._mode = Mode.RECOVERY
+        self._publish("device_management")
+        if not result.ok:
+            raise ControlError(ErrorCode.RECOVERY_REQUIRED, "Device release barrier failed")
 
     async def recover(self) -> None:
         """Complete recovery: healthy device + fresh frame + neutralize."""

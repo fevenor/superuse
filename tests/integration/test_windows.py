@@ -58,8 +58,9 @@ async def test_cli_open_against_running_broker(broker, tmp_path):
     runtime_dir = broker.runtime_dir
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
-        "-m",
-        "superuse",
+        "-c",
+        "import superuse.serve as s; s.open_browser=lambda url: None; "
+        "from superuse.__main__ import main; raise SystemExit(main())",
         "open",
         "--runtime-dir",
         str(runtime_dir),
@@ -150,8 +151,9 @@ def test_headless_serve_single_instance_and_health(tmp_path):
         second = subprocess.run(
             [
                 sys.executable,
-                "-m",
-                "superuse",
+                "-c",
+                "import superuse.serve as s; s.open_browser=lambda url: None; "
+                "from superuse.__main__ import main; raise SystemExit(main())",
                 "serve",
                 "--headless",
                 "--config",

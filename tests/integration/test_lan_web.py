@@ -197,7 +197,9 @@ async def test_login_chain_takeover_and_handback(lan_stack):
             assert response.status == 403
 
         async with http.post(
-            f"{base}/v1/control/takeover", json={"request_id": "5" * 36}, headers=headers
+            f"{base}/v1/control/takeover",
+            json={"request_id": "55555555-5555-4555-8555-555555555555"},
+            headers=headers,
         ) as response:
             assert response.status == 200, await response.text()
             takeover = await response.json()
@@ -205,7 +207,9 @@ async def test_login_chain_takeover_and_handback(lan_stack):
         assert broker.manager.get_state().mode.value == "human"
 
         async with http.post(
-            f"{base}/v1/control/handback", json={"request_id": "6" * 36}, headers=headers
+            f"{base}/v1/control/handback",
+            json={"request_id": "66666666-6666-4666-8666-666666666666"},
+            headers=headers,
         ) as response:
             assert response.status == 200
         assert broker.manager.get_state().mode.value == "idle"

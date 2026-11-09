@@ -1,4 +1,4 @@
-"""SuperKVM CDC wire protocol: HID input frames and read-only extension frames.
+"""SuperKVM CDC protocol: HID reports and explicitly supported management frames.
 
 HID framing (``57 AB ADDR CMD LEN PAYLOAD SUM8``) is the CH9329-compatible
 input path described in docs/development/device-video.md §2; the extension framing and the
@@ -31,13 +31,7 @@ EXT_INFO_KIND = 0x81
 # every extension write (rsp_code 0 = accepted); also arrives unsolicited for
 # vendor flows we do not drive.
 EXT_GENERAL_REPLY_KIND = 0
-# The single listed extension write: the vendor webapp's setMouseMode frame
-# (channel=1, kind=5, payload [mode, 0, 1]). Everything else stays read-only.
 EXT_SET_KIND = 5
-# Second listed write: the vendor webapp's restartDevice frame (channel=1,
-# kind=10, payload [1, 0, 0, 0], origin ACT_SET). The mouse coordinate mode
-# only takes effect after the device reboots and rebinds its HID interface
-# (vendor UI: "坐标模式变更，设备需要重启生效"), so remote operation needs this.
 EXT_RESTART_KIND = 10
 EXT_PAYLOAD_LIMIT = 256 * 1024
 EXT_BUFFER_LIMIT = 512 * 1024
@@ -123,11 +117,13 @@ def build_device_info_query() -> bytes:
     return build_ext_frame(EXT_QUERY_CHANNEL, EXT_QUERY_KIND)
 
 
-def build_mouse_mode_frame(mode: int) -> bytes:
+def build_mouse_mode_frame(mode: int, direction: int = 0, sensitivity: int = 1) -> bytes:
     """User-authorized setMouseMode write ([mode, 0, 1]); see EXT_SET_KIND."""
     if mode not in MOUSE_MODE_NAMES:
         raise ValueError(f"Unknown mouse mode {mode}")
-    return build_ext_frame(EXT_QUERY_CHANNEL, EXT_SET_KIND, bytes((mode, 0, 1)))
+    if direction not in (0, 1) or type(sensitivity) is not int or not 1 <= sensitivity <= 255:
+        raise ValueError("Invalid mouse settings")
+    return build_ext_frame(EXT_QUERY_CHANNEL, EXT_SET_KIND, bytes((mode, direction, sensitivity)))
 
 
 def build_device_restart_frame() -> bytes:
@@ -137,6 +133,33 @@ def build_device_restart_frame() -> bytes:
 
 def mouse_mode_name(raw: int) -> str | None:
     return MOUSE_MODE_NAMES.get(raw)
+
+
+def build_video_power_frame(enabled: bool) -> bytes:
+    if type(enabled) is not bool:
+        raise ValueError("enabled must be a boolean")
+    return build_ext_frame(1, 15, bytes([enabled]))
+
+
+def build_mouse_auto_move_frame(enabled: bool) -> bytes:
+    if type(enabled) is not bool:
+        raise ValueError("enabled must be a boolean")
+    return build_ext_frame(1, 11, bytes([enabled]))
+
+
+def parse_device_log(payload: bytes) -> dict | None:
+    if len(payload) < 22:
+        return None
+    length = struct.unpack_from("<H", payload, 20)[0]
+    if length > 4096 or len(payload) < 22 + length:
+        return None
+    return {
+        "product": struct.unpack_from("<H", payload)[0],
+        "application": payload[2],
+        "module_id": payload[3],
+        "module": payload[4:20].split(b"\0", 1)[0].decode("utf-8", errors="replace"),
+        "message": payload[22 : 22 + length].decode("utf-8", errors="replace"),
+    }
 
 
 def parse_general_reply(payload: bytes) -> dict:
@@ -233,6 +256,8 @@ def parse_device_info(payload: bytes) -> dict:
         return f"{value // 1000}.{value % 1000 // 100}.{value % 100}"
 
     info: dict = {}
+    if len(payload) >= 16:
+        info["serial_number"] = payload[:16].hex()
     if len(payload) >= 24:
         info.update(
             {
@@ -250,12 +275,26 @@ def parse_device_info(payload: bytes) -> dict:
                 "usb_baud": struct.unpack_from("<I", payload, 28)[0],
                 "usb_vid": hex(u16(32)),
                 "usb_pid": hex(u16(34)),
+                "udisk_direction_raw": payload[24],
+                "mouse_scroll_direction_raw": payload[26],
+                "mouse_sensitivity_raw": payload[27],
             }
         )
     if len(payload) >= 69:
         info["run_state_raw"] = payload[68]
+        info["edid_summary"] = payload[36:68].hex()
+    if len(payload) >= 77:
+        info.update(
+            {
+                "usb_host_baud": struct.unpack_from("<I", payload, 69)[0],
+                "usb_host_vid": hex(u16(73)),
+                "usb_host_pid": hex(u16(75)),
+            }
+        )
     if len(payload) >= 109:
         info["build_time"] = payload[77:109].decode("utf-8", errors="replace").rstrip("\x00")
     if len(payload) >= 135:
         info["video_low_power_enable_raw"] = payload[134]
+    if len(payload) >= 110:
+        info["mouse_auto_move_raw"] = payload[109]
     return info

@@ -382,6 +382,8 @@ class ServeApp:
             lan_enabled=self.lan_enabled,
             lan_toggle_available=self.lan_toggle_available,
             lan_address_text=self.lan_address_text,
+            on_set_keep_awake=self.broker.set_keep_awake,
+            keep_awake_enabled=lambda: self.broker.power.active,
         )
         self._tray_app = app
         app.run()

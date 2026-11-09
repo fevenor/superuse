@@ -41,6 +41,12 @@ const state = {
   deviceMouseMode: null,   // device-side persisted coordinate mode ("absolute"/"relative"/null)
   deviceInfoText: null,    // one-shot /v1/status device summary for the tooltip
   scaleMode: "fit",
+  displayWidth: 0,
+  displayHeight: 0,
+  zoom: 1,
+  cursorStyle: "default",
+  wheelDirection: 1,
+  wheelSpeed: 1,
   sequence: 0,
   heldKeys: new Set(),  // W3C codes currently held (non-modifier)
   heldModifiers: new Set(),
@@ -352,6 +358,7 @@ function pumpInput() {
 let lastMeta = null;
 
 function drawFrame(meta, jpegBytes) {
+  if (!meta.receivedAt) meta.receivedAt = performance.now();
   // Bound browser decoding too: one active decode and one newest pending frame.
   if (decodingFrame) { pendingFrame = {meta, jpegBytes}; return; }
   decodingFrame = true;
@@ -359,6 +366,13 @@ function drawFrame(meta, jpegBytes) {
   const url = URL.createObjectURL(blob);
   const img = new Image();
   img.onload = () => {
+    const frameAge = Math.max(0, Number(meta.age_ms) || 0) + performance.now() - meta.receivedAt;
+    if (frameAge > 2000 || (lastMeta && meta.instance_id === lastMeta.instance_id && meta.frame_id <= lastMeta.frame_id)) {
+      URL.revokeObjectURL(url);
+      finishFrame();
+      refreshFreshness();
+      return;
+    }
     if (canvas.width !== meta.image_width || canvas.height !== meta.image_height) {
       canvas.width = meta.image_width;
       canvas.height = meta.image_height;
@@ -368,7 +382,7 @@ function drawFrame(meta, jpegBytes) {
     URL.revokeObjectURL(url);
     state.frameCount++;
     lastMeta = meta;
-    lastFrameArrival = performance.now();
+    lastFrameArrival = performance.now() - frameAge;
     overlay.hidden = true;
     finishFrame();
   };
@@ -418,9 +432,12 @@ function updateCanvasSize() {
     if (cw / ch > ar) { dh = ch; dw = ch * ar; } else { dw = cw; dh = cw / ar; }
     canvas.style.width = dw + "px";
     canvas.style.height = dh + "px";
+  } else if (state.scaleMode === "fill") {
+    canvas.style.width = container.clientWidth + "px";
+    canvas.style.height = container.clientHeight + "px";
   } else {
-    canvas.style.width = canvas.width + "px";
-    canvas.style.height = canvas.height + "px";
+    canvas.style.width = (state.displayWidth || (lastMeta && lastMeta.native_width) || canvas.width) * state.zoom + "px";
+    canvas.style.height = (state.displayHeight || (lastMeta && lastMeta.native_height) || canvas.height) * state.zoom + "px";
   }
 }
 window.addEventListener("resize", updateCanvasSize);
@@ -445,6 +462,12 @@ function imageCoords(e) {
   const x = (e.clientX - rect.left) * sx;
   const y = (e.clientY - rect.top) * sy;
   if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return null;
+  if (lastMeta && lastMeta.active_rect) {
+    const [left, top, width, height] = lastMeta.active_rect;
+    const nativeX = x * lastMeta.native_width / canvas.width;
+    const nativeY = y * lastMeta.native_height / canvas.height;
+    if (nativeX < left || nativeY < top || nativeX >= left + width || nativeY >= top + height) return null;
+  }
   return {x, y};
 }
 
@@ -502,7 +525,10 @@ function sendMouse(e) {
     return;
   }
   const point = imageCoords(e);
-  if (!point) return;
+  if (!point) {
+    if (e.type === "mouseup") neutralizeInput();
+    return;
+  }
   sendInput({kind: "mouse_state", basis_id: lastMeta ? lastMeta.basis_id : null,
              x: Math.floor(point.x), y: Math.floor(point.y), buttons: e.buttons});
 }
@@ -569,11 +595,19 @@ document.addEventListener("pointerlockerror", () => {
 
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
+  if (e.ctrlKey) {
+    state.scaleMode = "native";
+    state.zoom = Math.max(0.1, Math.min(4, state.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+    updateCanvasSize();
+    if (window.superuseDisplayChanged) window.superuseDisplayChanged();
+    return;
+  }
   // Protocol wheel: positive scrolls up. DOM deltaY is positive downwards.
   let pixels = e.deltaY;
   if (e.deltaMode === 1) pixels *= 16;        // lines
   else if (e.deltaMode === 2) pixels *= 100;  // pages
-  const steps = Math.max(-120, Math.min(120, Math.round(-pixels / 40))) || -Math.sign(pixels);
+  const adjusted = -pixels * state.wheelDirection * state.wheelSpeed;
+  const steps = Math.max(-120, Math.min(120, Math.round(adjusted / 40))) || Math.sign(adjusted);
   if (steps === 0) return;
   if (state.mouseMode === "relative") {
     flushRelative();
@@ -713,7 +747,6 @@ function renderDeviceMode() {
   const restartBtn = document.getElementById("btnDeviceRestart");
   btn.disabled = deviceBusy;
   restartBtn.disabled = deviceBusy;
-  restartBtn.hidden = btn.hidden;  // same visibility rules as the mode button
   const label = {absolute: "绝对", relative: "相对"}[state.deviceMouseMode] || "未知";
   btn.textContent = `设备鼠标:${label}`;
   btn.title = state.deviceMouseMode === "relative"
@@ -722,7 +755,8 @@ function renderDeviceMode() {
       ? "设备处于绝对坐标模式（默认）；点击切为相对（仅移动设备/多屏目标需要）"
       : "设备鼠标坐标模式未知；点击尝试设为绝对（默认）";
   if (state.deviceInfoText) btn.title += `\n${state.deviceInfoText}`;
-  btn.hidden = !state.connected || state.lan || state.source === "simulated";
+  btn.hidden = !state.connected || state.lan || state.source === "simulated" || state.deviceType === "ch9329";
+  restartBtn.hidden = btn.hidden;
 }
 
 async function refreshDeviceInfo() {
@@ -745,12 +779,12 @@ document.getElementById("btnDeviceRestart").addEventListener("click", () => rest
 async function switchDeviceMode() {
   const target = state.deviceMouseMode === "absolute" ? "relative" : "absolute";
   await runDeviceTransaction(`切换为${target === "absolute" ? "绝对" : "相对"}…`,
-    () => api("/v1/device/mouse-mode", {method: "POST", body: JSON.stringify({mode: target})}));
+    () => api("/v1/device/mouse-mode", {method: "POST", body: JSON.stringify({request_id:newRequestId(), mode: target})}));
 }
 
 async function restartDevice() {
   if (!window.confirm("确定重启 SuperKVM 设备？期间控制中断约 15–30 秒，租约将回收。")) return;
-  await runDeviceTransaction("设备重启中…", () => api("/v1/device/restart", {method: "POST", body: "{}"}));
+  await runDeviceTransaction("设备重启中…", () => api("/v1/device/restart", {method: "POST", body: JSON.stringify({request_id:newRequestId()})}));
 }
 
 async function runDeviceTransaction(hint, action) {
@@ -854,7 +888,7 @@ function updateControls() {
 }
 
 function updateCursor() {
-  canvas.style.cursor = state.showCursor ? "default" : "none";
+  canvas.style.cursor = state.showCursor ? state.cursorStyle : "none";
   document.getElementById("btnCursor").classList.toggle("active", !state.showCursor);
 }
 

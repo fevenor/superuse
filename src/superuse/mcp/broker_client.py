@@ -65,6 +65,7 @@ class BrokerClient:
         self._running_jobs: set[str] = set()
         self._tasks: list[asyncio.Task] = []
         self._closing = False
+        self._typing_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # Session and transport
@@ -254,6 +255,8 @@ class BrokerClient:
 
     async def command(self, action: dict, *, wait_timeout_s: float = 30.0) -> dict:
         """Submit one action job and wait for its terminal result."""
+        if self._typing_task is not None and self._typing_task is not asyncio.current_task():
+            raise BridgeError("CONTROL_BUSY", "A text input is already running in this session")
         lease = self.require_lease()
         self._last_input_at = time.monotonic()
         job_id = None
@@ -276,6 +279,7 @@ class BrokerClient:
                 if job.get("terminal"):
                     return job
                 if time.monotonic() >= deadline:
+                    await self.cancel(job_id)
                     raise BridgeError(
                         ErrorCode.RESULT_UNKNOWN.value, "Job still running past wait budget"
                     )
@@ -302,6 +306,17 @@ class BrokerClient:
         finally:
             if job_id is not None:
                 self._running_jobs.discard(job_id)
+
+    async def type_text(self, text: str, interval: int, progress) -> dict:
+        from superuse.mcp.typing import type_text
+
+        if self._typing_task is not None:
+            raise BridgeError("CONTROL_BUSY", "A text input is already running in this session")
+        self._typing_task = asyncio.current_task()
+        try:
+            return await type_text(self, text, interval, progress)
+        finally:
+            self._typing_task = None
 
     async def cancel(self, job_id: str) -> dict:
         return await self.request(

@@ -29,6 +29,9 @@
   <button id="btnDeviceRestart" title="重启 SuperKVM 设备（同厂商 WebApp 的“重启 KVM”）；期间串口/视频短暂断开，租约回收，仅本机页面" hidden>重启设备</button>
   <button id="btnScale" title="切换 1:1 / 适应">1:1</button>
   <button id="btnFs" title="全屏">全屏</button>
+  <button id="btnScreenshot" title="保存原始采集分辨率的 PNG">截图</button>
+  <button id="btnDisplay">显示设置</button>
+  <button id="btnSettings" hidden>设备与诊断</button>
   <button id="btnLogout" title="退出局域网登录" hidden>退出登录</button>
   <span id="status">连接中…</span>
   <span id="fps"></span>
@@ -48,6 +51,76 @@
     </form>
   </div>
 </div>
+<dialog id="displayDialog" aria-labelledby="displayTitle">
+  <div class="dialog-heading"><h2 id="displayTitle">显示与输入</h2><button data-close="displayDialog" aria-label="关闭显示设置">关闭</button></div>
+  <form id="displayForm" class="settings-grid">
+    <label>显示方式<select id="displayFit"><option value="fit">适应窗口，保持比例</option><option value="fill">铺满窗口</option><option value="native">指定大小 / 1:1</option></select></label>
+    <label>显示分辨率<select id="displayResolution"><option value="0x0">跟随采集原始大小</option><option>640x480</option><option>800x600</option><option>1024x768</option><option>1280x720</option><option>1280x1024</option><option>1600x900</option><option>1920x1080</option><option>1920x1200</option><option>2560x1440</option><option>3840x2160</option><option>4096x2160</option><option value="custom">自定义</option></select></label>
+    <label>显示宽度<input id="displayWidth" type="number" min="320" max="4096" value="1920"></label>
+    <label>显示高度<input id="displayHeight" type="number" min="200" max="2160" value="1080"></label>
+    <label>缩放 <span id="zoomValue">100%</span><input id="displayZoom" type="range" min="10" max="400" value="100"></label>
+    <label>本地光标<select id="cursorStyle"><option value="default">箭头</option><option value="crosshair">十字</option><option value="grab">抓取</option><option value="cell">单元格</option><option value="none">隐藏</option></select></label>
+    <label>滚轮方向<select id="wheelDirection"><option value="1">标准</option><option value="-1">反向</option></select></label>
+    <label>滚轮速度<select id="wheelSpeed"><option value="0.5">0.5 倍</option><option value="1">1 倍</option><option value="2">2 倍</option><option value="3">3 倍</option></select></label>
+    <p class="hint wide">显示大小只改变本页画面，不修改被控机分辨率。Ctrl + 滚轮可连续缩放。</p>
+    <div class="wide actions"><button type="submit" class="primary">保存显示设置</button><button id="displayReset" type="button">恢复默认</button></div>
+  </form>
+  <p id="displayMessage" class="message" role="status"></p>
+</dialog>
+<dialog id="settingsDialog" aria-labelledby="settingsTitle">
+  <div class="dialog-heading"><h2 id="settingsTitle">设备与诊断</h2><button data-close="settingsDialog" aria-label="关闭设备设置">关闭</button></div>
+  <p id="settingsMessage" class="message" role="status" aria-live="polite"></p>
+  <section class="settings-section">
+    <h3>本机电源</h3>
+    <label class="check"><input id="keepAwake" type="checkbox">保持运行 Superuse 的电脑唤醒</label>
+    <p class="hint">允许屏幕熄灭，关闭页面后仍生效。与局域网开关独立；退出程序后释放。手动睡眠、合盖及电池策略仍由 Windows 决定。</p>
+    <p id="powerStatus" class="hint"></p>
+  </section>
+  <details class="settings-section" open><summary>连接设置</summary>
+    <form id="connectionForm" class="settings-grid">
+      <label>设备类型<select id="deviceType"><option value="superkvm">SuperKVM</option><option value="ch9329">CH9329</option></select></label>
+      <label>串口波特率<select id="serialBaud"></select></label>
+      <label class="wide">串口<select id="serialChoice"><option value="">保持当前设备</option></select></label>
+      <label class="wide">视频输入<select id="videoChoice"><option value="">保持当前设备</option></select></label>
+      <label>采集宽度<input id="captureWidth" type="number" min="320" max="3840" required></label>
+      <label>采集高度<input id="captureHeight" type="number" min="200" max="2160" required></label>
+      <label>请求帧率<input id="captureFps" type="number" min="1" max="60" required></label>
+      <p id="captureActual" class="hint"></p>
+      <p class="hint wide">保存后释放控制并重新连接。波特率是本机串口参数；实际采集尺寸与帧率取决于设备。CH9329 不提供 SuperKVM 扩展管理。</p>
+      <div class="actions wide"><button type="submit" class="primary">保存并重连</button><button id="scanDevices" type="button">扫描可用设备</button></div>
+    </form>
+  </details>
+  <details class="settings-section" open><summary>设备信息</summary>
+    <div class="actions"><button id="refreshInfo">查询设备信息</button></div>
+    <dl id="deviceInfo" class="info-grid"></dl>
+    <p class="hint">“视频就绪”表示采集卡在输出帧，不能据此判断被控机是否开机或 HDMI 是否有信号。</p>
+  </details>
+  <details class="settings-section"><summary>光标校正</summary>
+    <p class="hint">当采集画面内部带黑边时，指定实际桌面区域。坐标映射对网页和 MCP 同时生效，切换视频源或分辨率后清除。</p>
+    <form id="calibrationForm" class="settings-grid">
+      <label>左边距（像素）<input id="cropX" type="number" min="0" value="0" required></label>
+      <label>上边距（像素）<input id="cropY" type="number" min="0" value="0" required></label>
+      <label>有效宽度<input id="cropWidth" type="number" min="16" value="1920" required></label>
+      <label>有效高度<input id="cropHeight" type="number" min="16" value="1080" required></label>
+      <div class="actions wide"><button type="submit" class="primary">应用校正</button><button type="button" id="detectCrop">检测黑边</button><button type="button" id="resetCrop">取消校正</button></div>
+    </form>
+  </details>
+  <details class="settings-section" id="extendedSettings"><summary>设备选项</summary>
+    <label class="check"><input id="videoPower" type="checkbox">允许视频卡低功耗休眠</label>
+    <p class="hint">由设备决定何时休眠，视频可能暂时断开；可在本机关闭此选项恢复。它与本机保持唤醒无关。</p>
+    <label class="check"><input id="mouseAutoMove" type="checkbox">被控端鼠标微动</label>
+    <p class="hint">由 KVM 产生被控端鼠标活动；默认以设备实际状态为准。</p>
+
+  </details>
+  <details class="settings-section" id="diagnosticsPanel"><summary>串口诊断与设备日志</summary>
+    <p id="serialStats" class="hint"></p>
+    <div class="actions"><label class="check"><input id="enableLogs" type="checkbox">接收设备日志</label><button id="clearLogs">清空</button><button id="exportLogs">导出当前日志</button></div>
+    <label>过滤日志<input id="logFilter" type="search" placeholder="模块、产品、应用或内容"></label>
+    <pre id="deviceLogs" tabindex="0" aria-label="设备串口日志">尚未启用日志接收。</pre>
+    <p class="hint">仅保留本次运行最近 500 条，默认不接收、不写磁盘。只读查询和日志共用当前串口，不需要释放占用。</p>
+  </details>
+</dialog>
 <script src="/app.js"></script>
+<script src="/settings.js"></script>
 </body>
 </html>

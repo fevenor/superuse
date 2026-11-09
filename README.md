@@ -21,6 +21,8 @@ Superuse 适配 CDC `1209:0001` 与视频 `345F:2131`（`SK USB3 Video`）这一
 
 ## 快速开始
 
+人工页面新增显示尺寸与缩放、原生 PNG 截图，以及本机“设备与诊断”面板；连接类型/波特率/采集参数、光标校正、设备日志和独立保持唤醒的说明见[设备设置](docs/device-settings.md)。固件升级、任意原始串口发送和设备 VID/PID 改写不在此版本范围内。
+
 Windows x64、Python 3.12、uv；在仓库根目录的 PowerShell 中运行：
 
 ```powershell

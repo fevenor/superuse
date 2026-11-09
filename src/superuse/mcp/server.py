@@ -54,7 +54,13 @@ TOOL_DESCRIPTIONS = {
         " optional modifiers for a bounded hold. Requires control."
     ),
     "type_text": (
-        "Type US ASCII text (LF/TAB allowed; CR normalized). No template tags. Requires control."
+        "Type 1-512 US ASCII characters (LF/TAB allowed; CR normalized). Requires control. "
+        "Validates all text before input, then sends sequential chunks of at most 64 characters "
+        "with progress. Each chunk has a 30s deadline; the whole call has a 120s limit. "
+        "Configure the MCP host timeout above 120s, or send at most 64 characters per call "
+        "when its timeout is shorter. Stops on cancellation, takeover or failure without "
+        "replaying input. On partial/unknown failure inspect the target; never retry the whole "
+        "text. No Unicode, clipboard or template tags. Completion means reports written."
     ),
     "mouse_move": (
         "Move the pointer to image-pixel coordinates of the"
@@ -134,7 +140,10 @@ def build_server(
             "capture_screen, not the native resolution. Absolute tools may not work on some "
             "targets/lock screens. Use explicit *_relative tools there; their deltas are HID "
             "counts, not pixels. Take small steps and inspect screenshots; never assume an "
-            "absolute pointer position from accumulated deltas."
+            "absolute pointer position from accumulated deltas. type_text automatically splits "
+            "up to 512 ASCII characters into chunks of 64 and reports progress; allow 120s "
+            "plus transport overhead in the host, or submit smaller calls. Never replay "
+            "partially completed text after an error; inspect the target first."
         ),
     )
 
@@ -236,14 +245,16 @@ def build_server(
         )
 
     async def type_text(ctx: Context, text: str, char_interval_ms: int = 15) -> str:
-        return await _run_action(
-            ctx,
-            {
-                "kind": "type_text",
-                "text": text,
-                "char_interval_ms": max(10, min(50, int(char_interval_ms))),
-            },
-        )
+        client = await resolver(ctx)
+
+        async def progress(done, total):
+            await ctx.report_progress(done, total, "Characters written; inspect target to confirm")
+
+        try:
+            result = await client.type_text(text, max(10, min(50, int(char_interval_ms))), progress)
+        except BridgeError as exc:
+            raise _bridge_error(exc) from exc
+        return json.dumps(result)
 
     async def mouse_move(ctx: Context, basis_id: str, x: float, y: float) -> str:
         return await _run_action(ctx, {"kind": "mouse_move", "basis_id": basis_id, "x": x, "y": y})

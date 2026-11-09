@@ -30,7 +30,7 @@ Streamable HTTP（任务 2026-10-17）：`Superuse.exe` 在 `127.0.0.1:mcp_port`
 | `release_control` | 无 | 释放自己的租约并中和；无租约时幂等 no-op |
 | `capture_screen` | `max_width=1280`，320–1920；`after_frame_id?`；`wait_ms=2000`，0–2000 | 返回 ImageContent + 同一图片的 frame 元数据，不申请/续租 |
 | `press_key` | `code`，W3C physical code；`modifiers=[]`；`hold_ms=50`，10–1000 | 按下并抬起，有界完整动作 |
-| `type_text` | `text`，1–512 字符；`char_interval_ms=15`，10–50 | 全量预校验后输入 US ASCII、LF、TAB；不解释花括号标签 |
+| `type_text` | `text`，1–512 字符；`char_interval_ms=15`，10–50 | 全量预校验后，MCP 按最多 64 字符顺序提交 US ASCII、LF、TAB；报告进度，不解释花括号标签 |
 | `mouse_move` | `basis_id,x,y` | 图片像素坐标移动，保留本 owner 的按钮状态 |
 | `mouse_click` | `basis_id,x,y,button=left,count=1` | count 1 或 2；不隐式变更所有者 |
 | `mouse_drag` | `basis_id,from_x,from_y,to_x,to_y,button=left,duration_ms=500` | 时长 50–5000；有界插值，每步可取消 |
@@ -48,7 +48,9 @@ relative 工具与既有绝对工具独立提供，用于移动设备/多屏目�
 
 设备持久化鼠标坐标模式（State 可选字段 `device_mouse_mode`：absolute/relative，未知时缺省）。模式按报文类型**方向性门控**（2026-10-19 实测矩阵）：本模式原生报文（绝对模式 0x04 / 相对模式 0x05）正常作用；跨模式报文被设备丢弃——相对模式下 0x04 无效，绝对模式下 0x05 无效**且不能释放按住的按钮**（fence 因此同时写两种零报文，绝对零报文取最后写入位置）。已知相对模式时，绝对工具在提交校验与每个报告处返回 `DEVICE_MOUSE_MODE`（不静默发无效包）；模式未知（查询未应答）时不阻塞绝对工具。切换是运行时事务（写模式 → 立即发新模式匹配零报文 → 重查校验，约 1 秒；省略零报文会把鼠标管线卡死，需设备重启解卡）。模式切换与设备重启是仅人工页面（本机入口）可触发的设备管理写（见第 3 节），agent 无对应工具。
 
-可执行输入工具等待作业结束，最大 30 秒；过程中桥继续处理续租、状态和 MCP 取消。失败返回 CallToolResult 的 `isError=true` 与机器可读错误，正常业务失败不伪装成成功文本。成功使用 `completion="written"`、报告数、已完成步数和 job_id；没有视觉确认。
+可执行输入工具等待作业结束，每个作业最大 30 秒；过程中桥继续处理续租、状态和 MCP 取消。`type_text` 全量校验、归一化后拆为最多 64 字符的顺序作业，整个 MCP 调用上限 120 秒，各段绑定调用开始时的同一 lease，途中重新申请不能延续旧文本。每段成功后发送已完成字符数的 MCP progress；宿主需自行设置足够的调用超时。同会话分段期间其他输入返回 CONTROL_BUSY；接管、释放及在途取消仍有效。
+
+失败返回 CallToolResult 的 `isError=true` 与机器可读错误，正常业务失败不伪装成成功文本。成功使用 `completion="written"`、报告数、已完成步数和 job_id；没有视觉确认。分段文本另附 job_ids、characters_written、chunks_completed；失败给出此前确认完整写入的字符计数和当前段不确定标记，不自动续传或重放。直接 HTTP TypeText 动作仍遵守单作业上限。
 
 可使用 SDK 的结构化结果字段；为兼容客户端，同时提供简短 TextContent JSON。截图的 ImageContent 为 image/jpeg 的 base64 数据，而不是文件路径或 URL；紧邻 TextContent 返回 `basis_id`、图片尺寸、原生尺寸、frame_id、geometry_id、captured_at 和帧龄。图片、元数据必须对应同一帧/同一缩放结果。
 
@@ -74,8 +76,8 @@ relative 工具与既有绝对工具独立提供，用于移动设备/多屏目�
 | POST `/v1/control/release` | agent owner | `{request_id,lease}`，fence 完成后返回 State |
 | POST `/v1/control/takeover` | human | `{request_id}`；完成屏障后返回新 Lease + State |
 | POST `/v1/control/handback` | 允许交还的 human | `{request_id}`；完成屏障后返回 State |
-| POST `/v1/device/mouse-mode` | human 页面（cookie+page+CSRF），仅本机入口 | `{mode:"absolute"\|"relative"}` 运行时切换（厂商 webapp 同款时序，实机验证 2026-10-19）：写模式（校验 kind 0 回执）→ **立即**经同一写线程发送新模式匹配的零报文（缺这步会把设备鼠标管线卡死，两类报文均被丢弃直至设备重启）→ 重发只读查询并校验模式；全程约 1 秒、无需重启。返回 `{mouse_mode,state,device?}`。LAN 路由表不包含此端点，agent 无对应工具 |
-| POST `/v1/device/restart` | human 页面（cookie+page+CSRF），仅本机入口 | 无请求字段。写厂商同款重启命令（channel=1/kind=10/`[1,0,0,0]`）→ 断开本机串口 → 等待 supervisor 按原身份重连恢复；返回 `{restarted:true,state}`。串口/视频可能同时重枚举，租约按状态机回收 |
+| POST `/v1/device/mouse-mode` | human 页面（cookie+page+CSRF），仅本机入口 | `{request_id,mode:"absolute"\|"relative"}` 运行时切换（厂商 webapp 同款时序，实机验证 2026-10-19）：写模式（校验 kind 0 回执）→ **立即**经同一写线程发送新模式匹配的零报文（缺这步会把设备鼠标管线卡死，两类报文均被丢弃直至设备重启）→ 重发只读查询并校验模式；全程约 1 秒、无需重启。返回 `{mouse_mode,state,device?}`。LAN 路由表不包含此端点，agent 无对应工具 |
+| POST `/v1/device/restart` | human 页面（cookie+page+CSRF），仅本机入口 | `{request_id}`。写厂商同款重启命令（channel=1/kind=10/`[1,0,0,0]`）→ 断开本机串口 → 等待 supervisor 按原身份重连恢复；返回 `{restarted:true,state}`。串口/视频可能同时重枚举，租约按状态机回收 |
 | POST `/v1/commands` | 有效 owner | CommandEnvelope，成功 202 返回 job_id；不代表已写入 |
 | GET `/v1/jobs/{job_id}` | 本 session | Job；其他 session 查询返回 404，防止泄漏 |
 | POST `/v1/jobs/{job_id}/cancel` | 本 session | `{request_id}`；返回当前 Job 状态 |
@@ -88,7 +90,9 @@ relative 工具与既有绝对工具独立提供，用于移动设备/多屏目�
 
 内部 HTTP snapshot base64 仅供本地桥使用以简化元数据绑定；视频 WS 使用二进制，不能把连续视频全改为 base64。若后续改为二进制图片 + 元数据接口，要一起更新契约和缓存绑定测试。
 
-控制 route 共享幂等、身份和状态机；网页输入与 MCP 不能各自实现一份控制规则。状态变化/作业/视频路径不接受全局裸 `release_all`。
+控制 route 共享幂等、身份和状态机；网页输入与 MCP 不能各自实现一份控制规则。状态变化/作业/视频路径不接受全局裸 `release_all`。控制请求的 request_id 必须是 UUID；同一 session 的同 ID、同路径和请求体共享在途任务与完成结果，120 秒内不重复执行。不同请求复用同 ID 返回 REQUEST_ID_CONFLICT，容量 1024，满时拒绝新请求。重复取得的旧 Lease 不会恢复已撤销的控制权。
+
+本机人工管理新增 `GET /v1/device/overview`、`GET /v1/device/discover`、`GET /v1/device/logs` 和 `POST /v1/device/action`。写请求为 `{request_id,operation,value}`，使用同一幂等缓存；operation 包括 connection、refresh、keep_awake、video_low_power、mouse_auto_move、logs、calibration_detect、calibration。设备选项按类型和上报字段限制，所有设备写入先释放控制再确认读回。上述管理路由不在 LAN 路由表中，agent 不可调用。本机及 LAN 人工页面可访问 `GET /v1/frames/screenshot.png`，输出新鲜原始尺寸 PNG，无服务端文件保存。
 
 人工 HTTP 路由额外要求 `X-Superuse-Page` 随机 token，服务端据此确定 page actor；cookie 仅标识浏览器身份，不能令多个标签页共享 owner。context 为只读同源接口，响应不允许跨域读取。页面 reload 通过 cookie/context/page 重新建立 actor，不从 localStorage/sessionStorage 复活旧 lease。
 
@@ -132,11 +136,11 @@ LAN web 监听 `lan_host:web_port`，路由为内部 API 的控制子集：`POST
 
 ## 6. 坐标和画面新鲜度
 
-MVP 关闭自动裁边，显示完整采集画面。捕获实际 native_width/native_height；给 agent 的图片可以等比缩小，不放大。每种当前采集 generation、geometry 与编码尺寸对应一个服务端注册的 `basis_id`，同时绑定 instance。
+默认显示完整采集画面，不自动裁边。捕获实际 native_width/native_height；给 agent 的图片可以等比缩小，不放大。每种当前采集 generation、geometry 与编码尺寸对应一个服务端注册的 `basis_id`，同时绑定 instance。人工校正后 FrameMetadata 可包含 `active_rect=[left,top,width,height]`，单位为原始采集像素，图片仍为完整画面。服务端先将图片坐标换算为原始像素，再减去区域偏移并映射到 HID；区域外坐标拒绝。修改校正会换 geometry 并废止原 basis，来源或采集尺寸变化时清除。
 
 客户端传的是**所看到图片的像素坐标**。服务端按 basis 中的 image_width/image_height 转成原图坐标，再转 HID 0–4095：`floor(image_x * 4096 / image_width)`，Y 同理；数值必须有限且 `0 <= x < image_width`。有效最右/下像素结果限制为 4095。越界、NaN、旧 basis 必须报错，不静默 clamp 用户传错的点。
 
-浏览器依据实际画面显示区域减去留白/letterbox，再映射图片像素；点击画面之外的留白不产生输入。不要用 window.devicePixelRatio 重复缩放，也不要直接传 CSS 坐标。若未来启用裁边，必须在 basis 加上完整 crop/transform 并同步更新契约，不能单方面沿用旧公式。
+浏览器依据实际画面显示区域减去留白/letterbox，再映射图片像素；点击画面之外的留白不产生输入。不要用 window.devicePixelRatio 重复缩放，也不要直接传 CSS 坐标。校正变换由服务端统一执行。
 
 basis 在所属实例、采集 generation、geometry、profile 仍有效时可复用；没有引用/使用超过 60 秒可回收，LRU 上限 64。页面视频持续使用的 basis 需要保活；回收旧 basis 后返回 STALE_BASIS，客户端重新截图。frame_id 为实例内严格递增整数，不能仅凭该数字作为坐标变换依据。
 

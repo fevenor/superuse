@@ -53,6 +53,7 @@ class LanApi(Api):
             network=base.network,
         )
         self.lan_identities = lan_identities
+        self.control_requests = base.control_requests
         self.authority = authority
         self.web_port = web_port
         self.port = web_port  # base-class Host check target
@@ -254,8 +255,10 @@ class LanApi(Api):
         app.router.add_get("/v1/jobs/{job_id}", self.get_job)
         app.router.add_post("/v1/jobs/{job_id}/cancel", self.cancel_job)
         app.router.add_get("/v1/frames/latest", self.frames_latest)
+        app.router.add_get("/v1/frames/screenshot.png", self.screenshot_png)
         app.router.add_get("/", self.index)
         app.router.add_get("/app.js", lambda r: self._static(r, "app.js"))
+        app.router.add_get("/settings.js", lambda r: self._static(r, "settings.js"))
         app.router.add_get("/app.css", lambda r: self._static(r, "app.css"))
         app.router.add_get("/icon.svg", lambda r: self._static(r, "icon.svg"))
         return app

@@ -20,6 +20,7 @@ from typing import Any
 
 from superuse.buildenv import simulated_devices_allowed
 from superuse.core.errors import ControlError, ErrorCode
+from superuse.device.profiles import BAUD_RATES
 
 
 class ConfigError(ValueError):
@@ -30,10 +31,12 @@ DEFAULTS: dict[str, Any] = {
     "schema_version": 1,
     "device": {
         "mode": "real",
+        "type": "superkvm",
         "serial": {
             "vid": 0x1209,
             "pid": 0x0001,
             "serial_number": "",
+            "location": "",
             "baud": 2_000_000,
             "read_timeout_ms": 100,
             "write_timeout_ms": 250,
@@ -51,6 +54,7 @@ DEFAULTS: dict[str, Any] = {
         },
     },
     "server": {"host": "127.0.0.1", "port": 0},
+    "power": {"keep_awake": False},
     "network": {
         "key": "",  # empty = network access not configured (task 2026-10-17 T3)
         "web_port": 18765,
@@ -142,6 +146,7 @@ _RANGES: dict[tuple[str, ...], tuple[int | float, int | float]] = {
 
 _ENUMS: dict[tuple[str, ...], tuple[Any, ...]] = {
     ("device", "mode"): ("simulated", "real"),
+    ("device", "type"): ("superkvm", "ch9329"),
     ("device", "video", "backend"): ("dshow", "msmf"),
     ("logging", "level"): ("DEBUG", "INFO", "WARNING", "ERROR"),
 }
@@ -218,19 +223,20 @@ def validate(config: dict[str, Any]) -> None:
             raise ConfigError(f"{'.'.join(path)}: must be one of {list(allowed)}")
 
     serial = config["device"]["serial"]
-    if (serial["vid"], serial["pid"]) != (0x1209, 0x0001):
-        raise ConfigError(
-            "device.serial: only the SuperKVM CDC identity 0x1209:0x0001 is supported"
-        )
-    if serial["baud"] != 2_000_000:
-        raise ConfigError("device.serial.baud: only 2000000 is supported")
+    if isinstance(serial["baud"], bool) or serial["baud"] not in BAUD_RATES:
+        raise ConfigError("device.serial.baud: unsupported baud rate")
     video = config["device"]["video"]
-    if (video["vid"], video["pid"]) != (0x345F, 0x2131):
-        raise ConfigError(
-            "device.video: only the SK USB3 Video identity 0x345f:0x2131 is supported"
-        )
-    if video["name"] != "SK USB3 Video":
-        raise ConfigError("device.video.name: must be 'SK USB3 Video'")
+    for identity in (serial, video):
+        for key in ("vid", "pid"):
+            if type(identity[key]) is not int or not 0 <= identity[key] <= 65535:
+                raise ConfigError(f"device.{key}: must be an integer in [0, 65535]")
+    for value in (serial["serial_number"], serial["location"], video["name"], video["device_path"]):
+        if not isinstance(value, str) or len(value) > 2048:
+            raise ConfigError("device identity fields must be bounded strings")
+    if not video["name"]:
+        raise ConfigError("device.video.name must not be empty")
+    if type(config["power"]["keep_awake"]) is not bool:
+        raise ConfigError("power.keep_awake must be a boolean")
     if video["autocrop"] is not False:
         raise ConfigError("device.video.autocrop: must be false in v1")
     if config["server"]["host"] != "127.0.0.1" or config["server"]["port"] != 0:

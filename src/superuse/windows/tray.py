@@ -54,6 +54,8 @@ class TrayApp:
         lan_enabled: Callable[[], bool] | None = None,
         lan_toggle_available: Callable[[], bool] | None = None,
         lan_address_text: Callable[[], str] | None = None,
+        on_set_keep_awake: Callable[[bool], object] | None = None,
+        keep_awake_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self._loop = loop
         self._on_open_ui = on_open_ui
@@ -69,6 +71,8 @@ class TrayApp:
         self._lan_toggle_available = lan_toggle_available or (lambda: False)
         self._lan_address_text = lan_address_text or (lambda: "")
         self._icon = None
+        self._on_set_keep_awake = on_set_keep_awake
+        self._keep_awake_enabled = keep_awake_enabled or (lambda: False)
 
     # -- thread-safe dispatch ---------------------------------------------
 
@@ -116,6 +120,10 @@ class TrayApp:
         text = self._lan_address_text()
         self._dispatch(_copy_to_clipboard, text)
 
+    def keep_awake_toggled(self, item) -> None:
+        if self._on_set_keep_awake is not None:
+            self._dispatch(self._on_set_keep_awake, not self._keep_awake_enabled())
+
     def copy_diagnostics_clicked(self, _, __) -> None:
         text = self._on_copy_diagnostics()  # read-only snapshot; cheap
         self._dispatch(_copy_to_clipboard, text)
@@ -140,6 +148,11 @@ class TrayApp:
                 enabled=lambda item: self._lan_toggle_available(),
             ),
             MenuItem("复制局域网地址", self.copy_lan_addresses_clicked),
+            MenuItem(
+                "保持本机唤醒（允许熄屏）",
+                self.keep_awake_toggled,
+                checked=lambda item: self._keep_awake_enabled(),
+            ),
             Menu.SEPARATOR,
             MenuItem("接管并打开界面", self.takeover_clicked),
             MenuItem("交还给 agent", self.handback_clicked),

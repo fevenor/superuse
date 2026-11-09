@@ -64,7 +64,9 @@ core 不依赖 Windows GUI、aiohttp 或 MCP。传输层只做认证、校验、
 
 ## 5. 视频与范围
 
-FrameHub 绑定帧元数据、缩放尺寸和 basis，保留有界编码缓存。人工预览最大宽 1920、JPEG quality 90，MCP 默认宽 1280、quality 80；均不放大源图。服务端和浏览器使用最新帧策略，慢消费者不积压历史视频。
+FrameHub 绑定帧元数据、缩放尺寸和 basis，保留有界编码缓存。人工预览最大宽 4096、JPEG quality 90，MCP 默认宽 1280、quality 80；均不放大源图。采集线程通过单槽邮箱送入事件循环，使用真实采集时间判断新鲜度。编码在受限的后台任务执行，同一来源共享结果；慢视频连接关闭并注销，服务端和浏览器均只保留最新待处理帧。
+
+`device/management.py` 负责本机设备设置事务和查询，复用控制管理器、串口执行器及采集源。`device/profiles.py` 限定 SuperKVM 与 CH9329 能力，`preferences.py` 保存连接和电源偏好，`windows/power.py` 管理独立的系统唤醒请求。光标校正写入服务端 basis，网页和 MCP 使用同一变换。详情见[设备设置](../device-settings.md)。
 
 网络访问面向可信局域网：明文 HTTP/WS，单一共享 key 准入（远程浏览器登录与 HTTP MCP Bearer），无 HTTPS、证书、OAuth、账号或配对审批；LAN 默认关闭，由托盘事务式开启。发布（frozen）构建只有真实设备模式并迁移旧 simulated 配置；模拟仅存在于开发源码与测试 fixture（显式注入）。
 

@@ -5,11 +5,13 @@ schema_version = 1
 # recovers when it is plugged in. "simulated" is a development/test-only
 # mode and is rejected by the packaged release builds.
 mode = "real"
+type = "superkvm"
 
 [device.serial]
 vid = 0x1209
 pid = 0x0001
 serial_number = ""
+location = ""
 baud = 2000000
 read_timeout_ms = 100
 write_timeout_ms = 250
@@ -28,6 +30,9 @@ autocrop = false
 [server]
 host = "127.0.0.1"
 port = 0
+
+[power]
+keep_awake = false
 
 [network]
 # Trusted-LAN access (task 2026-10-17). The key is shared by remote browsers

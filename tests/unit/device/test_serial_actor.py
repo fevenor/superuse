@@ -250,7 +250,11 @@ async def test_set_mouse_mode_writes_vendor_frame_then_requeries():
             if len(serial.writes) >= 2:
                 break
             await asyncio.sleep(0.005)
-        assert serial.writes[1] == build_device_info_query()
+        from superuse.core.models import MouseAbsReport
+        from superuse.device.protocol import encode_hid_report
+
+        assert serial.writes[1] == encode_hid_report(MouseAbsReport(0, 2048, 2048, 0))
+        assert serial.writes[2] == build_device_info_query()
     finally:
         actor.stop()
 

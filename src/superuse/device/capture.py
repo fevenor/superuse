@@ -67,10 +67,12 @@ class CaptureWorker:
         self._thread: threading.Thread | None = None
         self._cap = None
         self._first_frame_budget_s = 10.0
+        self._started_at = 0.0
 
     def start(self) -> None:
         if self._thread is not None:
             raise RuntimeError("Capture thread already exists; stop it first")
+        self._started_at = time.monotonic()
         self._thread = threading.Thread(target=self._run, name="capture-worker", daemon=True)
         self._thread.start()
 
@@ -107,12 +109,30 @@ class CaptureWorker:
         if not cap.isOpened():
             cap.release()
             raise RuntimeError(f"Failed to open camera index {self._index} via {self._backend}")
+        self._cap = cap
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
         cap.set(cv2.CAP_PROP_FPS, self._fps)
-        self._cap = cap
+
+    def check_health(self) -> None:
+        if self.status in ("fault", "disconnected") or not self._started_at:
+            return
+        last = self.latest.monotonic if self.latest else self._started_at
+        budget = 3.0 if self.latest else self._first_frame_budget_s
+        if time.monotonic() - last > budget:
+            self.status = "fault"
+            self.fault_reason = "capture_stalled" if self.latest else "first_frame_timeout"
 
     def _run(self) -> None:
+        try:
+            self._read_loop()
+        except Exception:
+            self.status = "fault"
+            self.fault_reason = "read_exception"
+        finally:
+            self._release()
+
+    def _read_loop(self) -> None:
         try:
             self._open()
         except Exception:
@@ -140,6 +160,7 @@ class CaptureWorker:
                 time.sleep(0.016)
                 continue
             consecutive_failures = 0
+            self.status = "ready"
             height, width = frame.shape[:2]
             self._sequence += 1
             now = time.monotonic()

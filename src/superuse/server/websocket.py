@@ -27,7 +27,7 @@ AUTH_WINDOW_S = 3.0
 VIDEO_HEADER_LIMIT = 4096
 VIDEO_FRAME_LIMIT = 16 * 1024 * 1024
 VIDEO_SEND_TIMEOUT_S = 2.0
-PREVIEW_MAX_WIDTH = 1920
+PREVIEW_MAX_WIDTH = 4096
 PREVIEW_JPEG_QUALITY = 90
 MAX_WS_MESSAGE = 256 * 1024
 
@@ -43,6 +43,7 @@ class VideoViewer:
     ws: web.WebSocketResponse
     outbox: asyncio.Queue[bytes] = field(default_factory=lambda: asyncio.Queue(maxsize=1))
     task: asyncio.Task | None = None
+    session_id: str = ""
 
     def offer(self, payload: bytes) -> None:
         """Queue the newest frame; an older pending frame is dropped."""
@@ -172,9 +173,12 @@ class WsServer:
         try:
             while True:
                 event = await queue.get()
-                await ws.send_json(event.to_wire())
-        except (asyncio.CancelledError, ConnectionResetError, RuntimeError):
+                await asyncio.wait_for(ws.send_json(event.to_wire()), timeout=2)
+        except (TimeoutError, asyncio.CancelledError, ConnectionResetError, RuntimeError):
             pass
+        finally:
+            if not ws.closed:
+                await ws.close()
 
     # ------------------------------------------------------------------
     # /v1/video
@@ -189,7 +193,13 @@ class WsServer:
             await ws.send_json({"error": exc.to_wire(), "request_id": "0" * 36})
             await ws.close(code=4001, message=b"authentication failed")
             return ws
-        viewer = VideoViewer(ws=ws)
+        if (
+            len(self._video_viewers) >= 16
+            or sum(v.session_id == _session.session_id for v in self._video_viewers) >= 2
+        ):
+            await ws.close(code=1013, message=b"viewer limit")
+            return ws
+        viewer = VideoViewer(ws=ws, session_id=_session.session_id)
         viewer.task = asyncio.ensure_future(self._send_video(viewer))
         try:
             self._video_viewers.add(viewer)
@@ -215,7 +225,11 @@ class WsServer:
                 payload = await viewer.outbox.get()
                 await asyncio.wait_for(viewer.ws.send_bytes(payload), timeout=VIDEO_SEND_TIMEOUT_S)
         except (TimeoutError, asyncio.CancelledError, ConnectionResetError, RuntimeError):
-            pass  # slow viewer closed; capture and other viewers continue
+            pass
+        finally:
+            self._video_viewers.discard(viewer)
+            if not viewer.ws.closed:
+                await viewer.ws.close(code=1013, message=b"video sender stopped")
 
     async def broadcast_loop(self) -> None:
         """Publish the latest encoded frame to every viewer at publish_fps."""
@@ -227,12 +241,15 @@ class WsServer:
                 await asyncio.sleep(interval)
                 if not self._video_viewers:
                     continue
-                snapshot = self.hub.publish_snapshot(
-                    now=time.monotonic(),
-                    freshness_s=self.api.config.stall_timeout_s,
-                    max_width=PREVIEW_MAX_WIDTH,
-                    jpeg_quality=PREVIEW_JPEG_QUALITY,
-                )
+                try:
+                    snapshot = await self.hub.publish_snapshot_async(
+                        now=time.monotonic,
+                        freshness_s=self.api.config.stall_timeout_s,
+                        max_width=PREVIEW_MAX_WIDTH,
+                        jpeg_quality=PREVIEW_JPEG_QUALITY,
+                    )
+                except ControlError:
+                    continue
                 if snapshot is None:
                     continue
                 metadata, jpeg = snapshot
@@ -240,6 +257,8 @@ class WsServer:
                 if len(header) > VIDEO_HEADER_LIMIT:
                     continue
                 payload = struct.pack(">I", len(header)) + header + jpeg
+                if len(payload) > VIDEO_FRAME_LIMIT:
+                    continue
                 for viewer in list(self._video_viewers):
                     viewer.offer(payload)
         except asyncio.CancelledError:

@@ -305,6 +305,15 @@ async function main() {
   assert.equal(discarded.sent.length, sentBeforeClose, "revocation discards unsent input permanently");
 
   const video = harness();
+  video.canvas.width = 1280;
+  video.canvas.height = 720;
+  vm.runInContext("lastMeta = {active_rect:[150,75,1620,930], native_width:1920, native_height:1080, basis_id:'frame'}", video.sandbox);
+  video.canvas.events.mousedown({type:"mousedown", preventDefault() {}, clientX:50, clientY:50, buttons:1});
+  assert.equal(video.sent.length, 0, "calibrated black borders do not send clicks");
+  video.canvas.events.mousedown({type:"mousedown", preventDefault() {}, clientX:500, clientY:300, buttons:1});
+  assert.equal(video.sent.at(-1).action.buttons, 1);
+  video.canvas.events.mouseup({type:"mouseup", preventDefault() {}, clientX:50, clientY:50, buttons:0});
+  assert.equal(video.sent.at(-1).action.buttons, 0, "release on a black border clears held buttons");
   for (let i=1; i<=100; i++) video.sandbox.drawFrame({frame_id:i, image_width:1920, image_height:1080}, [1]);
   assert.equal(video.images.length, 1, "one decode in flight");
   video.images[0].onload();

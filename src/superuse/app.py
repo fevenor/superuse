@@ -13,6 +13,7 @@ import contextlib
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from superuse.device.discovery import (
     match_serial_port,
     match_video_device,
 )
+from superuse.device.lifecycle import stop_device
 from superuse.device.serial_actor import SerialActor
 from superuse.device.simulated import SimulatedCapture, SimulatedSerial
 from superuse.device.transport import RealSerialTransport
@@ -90,6 +92,15 @@ class Broker:
         credentials: Credentials | None = None,
         supervisor_tick_s: float = 0.5,
     ) -> None:
+        from superuse.preferences import Preferences
+        from superuse.windows.power import PowerRequest
+
+        self.preferences = Preferences(runtime_dir.parent / "state" / "preferences.json")
+        try:
+            config = self.preferences.load(config)
+        except (ValueError, OSError):
+            logger.warning("Saved preferences could not be loaded; using configuration")
+        self.power = PowerRequest()
         self.config = config
         self.runtime_dir = runtime_dir
         self.web_dir = web_dir
@@ -116,6 +127,9 @@ class Broker:
         self._capture_generation = 0
         self._video_status_generation = 0
         self._serial_transport = None
+        self._pinned_serial = ""
+        self._pinned_serial_location = ""
+        self._pinned_video = ""
         self._loop: asyncio.AbstractEventLoop | None = None
         self._supervisor: DeviceSupervisor | None = None
         self._supervisor_task: asyncio.Task | None = None
@@ -156,6 +170,9 @@ class Broker:
         # LAN access policy: shared key, entry tagging, network generation
         # (task 2026-10-17 T3). Config changes need a restart by design.
         self.network = NetworkAuthority(key=config.network["key"])
+        from superuse.device.management import DeviceManagement
+
+        self.management = DeviceManagement(self)
         self.lan_identities = LanIdentityRegistry(self.network)
         self.api = Api(
             config=config,
@@ -168,6 +185,7 @@ class Broker:
             device_control=self.set_device_mouse_mode,
             device_restart=self.restart_device,
             device_info_provider=self.device_diagnostics,
+            management=self.management,
         )
         self.ws = None
         self.runner: web.AppRunner | None = None
@@ -182,6 +200,28 @@ class Broker:
         # Serializes enable/disable: rapid tray clicks and programmatic
         # toggles share one transaction at a time.
         self.lan_toggle_lock = asyncio.Lock()
+
+    def power_state(self) -> dict:
+        return {
+            "keep_awake": self.config.section("power")["keep_awake"],
+            "active": self.power.active,
+            "error": self.power.error,
+        }
+
+    async def set_keep_awake(self, enabled: bool) -> dict:
+        if type(enabled) is not bool:
+            raise ControlError(ErrorCode.INVALID_REQUEST, "keep_awake must be a boolean")
+        previous = self.power.active
+        try:
+            self.power.set_enabled(enabled)
+            self.preferences.save({**self.preferences.values, "power": {"keep_awake": enabled}})
+        except OSError as exc:
+            self.power.set_enabled(previous)
+            raise ControlError(
+                ErrorCode.DEVICE_UNAVAILABLE, "Could not apply or save power preference"
+            ) from exc
+        self.config.raw["power"]["keep_awake"] = enabled
+        return self.power_state()
 
     # ------------------------------------------------------------------
     # Devices
@@ -200,8 +240,11 @@ class Broker:
                 list_serial_ports(),
                 vid=identity["vid"],
                 pid=identity["pid"],
-                serial_number=identity["serial_number"],
+                serial_number=identity["serial_number"] or self._pinned_serial,
+                location=identity["location"] or self._pinned_serial_location,
             )
+            self._pinned_serial = port.serial_number
+            self._pinned_serial_location = port.location
             transport = RealSerialTransport(
                 port.device,
                 baud=identity["baud"],
@@ -215,6 +258,8 @@ class Broker:
             input_queue_limit=control["input_queue_limit"],
             on_status=self._on_serial_status,
             on_device_info=self._on_device_info,
+            validate_report=self.manager.validate_report,
+            device_type=self.config.section("device")["type"],
         )
         return transport, actor
 
@@ -230,8 +275,24 @@ class Broker:
         assert loop is not None
         generation = self.hub.capture_generation
 
+        mailbox_lock = threading.Lock()
+        pending = None
+        scheduled = False
+
+        def drain() -> None:
+            nonlocal pending, scheduled
+            with mailbox_lock:
+                frame, pending, scheduled = pending, None, False
+            if frame is not None:
+                self._on_capture_frame(generation, frame)
+
         def publish(frame) -> None:
-            loop.call_soon_threadsafe(self._on_capture_frame, generation, frame)
+            nonlocal pending, scheduled
+            with mailbox_lock:
+                pending = frame
+                if not scheduled:
+                    scheduled = True
+                    loop.call_soon_threadsafe(drain)
 
         def geometry(width: int, height: int) -> None:
             loop.call_soon_threadsafe(self._on_capture_geometry, generation, width, height)
@@ -249,8 +310,11 @@ class Broker:
             list_video_devices(video["backend"]),
             backend=video["backend"],
             name=video["name"],
-            device_path=video["device_path"],
+            device_path=video["device_path"] or self._pinned_video,
+            vid=video["vid"],
+            pid=video["pid"],
         )
+        self._pinned_video = camera.device_path
         return CaptureWorker(
             backend=video["backend"],
             index=camera.index,
@@ -391,12 +455,7 @@ class Broker:
 
         No device restart is involved; the whole switch takes seconds.
         """
-        from superuse.core.models import MouseAbsReport, MouseRelReport
-        from superuse.device.protocol import (
-            MOUSE_MODE_NAMES,
-            build_device_info_query,
-            encode_hid_report,
-        )
+        from superuse.device.protocol import MOUSE_MODE_NAMES
 
         if mode not in MOUSE_MODE_NAMES:
             raise ControlError(ErrorCode.INVALID_REQUEST, "mode must be 1 or 2")
@@ -405,18 +464,10 @@ class Broker:
                 ErrorCode.INVALID_REQUEST, "Simulated source has no device mouse mode"
             )
         expected = MOUSE_MODE_NAMES[mode]
-        zero = MouseRelReport(0, 0, 0, 0) if mode == 1 else MouseAbsReport(0, 0, 0, 0)
-        async with self._device_control_lock:
-            actor = self.actor
-            if actor is None or actor.status != "ready":
-                raise ControlError(ErrorCode.DEVICE_UNAVAILABLE, "Serial device not ready")
+        async with self.management.transaction():
+            actor = self.management._actor()
             outcome = await actor.set_mouse_mode(mode, reply_timeout_s=0.2)
-            if outcome.ok:
-                # Same-thread ordering: the zero report and the re-query
-                # follow the mode write before anything else is written.
-                actor._enqueue_control(("raw", encode_hid_report(zero), lambda o: None))
-                actor._enqueue_control(("raw", build_device_info_query(), lambda o: None))
-            else:
+            if not outcome.ok:
                 if (outcome.error or "").startswith("REJECTED:"):
                     raise ControlError(
                         ErrorCode.SERIAL_WRITE_FAILED,
@@ -425,16 +476,12 @@ class Broker:
                 if outcome.error == "CLOSED":
                     raise ControlError(ErrorCode.DEVICE_UNAVAILABLE, "Serial device not ready")
                 raise ControlError(ErrorCode.SERIAL_WRITE_FAILED, f"Write failed: {outcome.error}")
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            if self.manager.get_state().mouse_mode == expected:
-                return self.manager.get_state().to_wire()
-            await asyncio.sleep(0.1)
-        final = self.manager.get_state().mouse_mode
-        raise ControlError(
-            ErrorCode.DEVICE_MOUSE_MODE,
-            f"Device still reports {final or 'unknown'} mode after the switch; expected {expected}",
-        )
+            await self.management.refresh()
+            if self.manager.get_state().mouse_mode != expected:
+                raise ControlError(
+                    ErrorCode.DEVICE_MOUSE_MODE, "Device mode readback did not match"
+                )
+        return self.manager.get_state().to_wire()
 
     async def restart_device(self) -> dict:
         """User-authorized device restart (human page only).
@@ -457,10 +504,8 @@ class Broker:
         connection as it reboots); a rejection or hard failure raises. The
         follow-up reconnect wait is the end-to-end validation.
         """
-        async with self._device_control_lock:
-            actor = self.actor
-            if actor is None or actor.status != "ready":
-                return  # already gone; the reconnect cycle re-attaches it
+        async with self.management.transaction():
+            actor = self.management._actor()
             outcome = await actor.restart_device()
         if outcome.ok or outcome.error in ("CLOSED", "TIMEOUT"):
             return
@@ -493,12 +538,16 @@ class Broker:
         return wire or None
 
     def _on_frame(self, frame) -> None:
+        if not 0 <= self.clock.now - frame.monotonic <= self.config.freshness_s:
+            return
+        if self.hub.latest is not None and frame.monotonic <= self.hub.latest.monotonic:
+            return
         changed = self.hub.publish(frame)
         generation = self.hub.capture_generation
         if self._video_status_generation != generation:
             self._video_status_generation = generation
             self.manager.set_video_status(DeviceStatus.READY)
-        self.manager.frame_received()
+        self.manager.frame_received(frame.monotonic)
         if changed:
             self.manager.geometry_changed()
 
@@ -520,6 +569,10 @@ class Broker:
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
+        try:
+            self.power.set_enabled(self.config.section("power")["keep_awake"])
+        except OSError:
+            logger.warning("Keep awake request could not be activated")
 
         # Devices first (fast path keeps the neutralize-before-serve order),
         # but a missing device is a state, not a startup failure: the tray,
@@ -765,6 +818,7 @@ class Broker:
             logger.exception("periodic task crashed")
 
     async def stop(self) -> None:
+        self.power.close()
         if self._supervisor_task is not None:
             self._supervisor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -799,10 +853,10 @@ class Broker:
         if self.capture is not None:
             if getattr(self.capture, "fault", None) or getattr(self.capture, "fault_reason", None):
                 self.manager.set_video_status(DeviceStatus.FAULT)
-            self.capture.stop()
+            await stop_device(self.capture)
             self.capture = None
         if self.actor is not None:
-            self.actor.stop()
+            await stop_device(self.actor)
             self.actor = None
         self._remove_runtime_file()
 
@@ -950,9 +1004,10 @@ class DeviceSupervisor:
                 broker = self._broker
                 if broker.manager.mode.value in ("stopping",):
                     return
-                await self._maybe_reconnect_serial()
-                await self._maybe_restart_capture()
-                await self._maybe_recover()
+                async with broker._device_control_lock:
+                    await self._maybe_reconnect_serial()
+                    await self._maybe_restart_capture()
+                    await self._maybe_recover()
         except asyncio.CancelledError:
             return
         except Exception:
@@ -1008,7 +1063,10 @@ class DeviceSupervisor:
             # old actor must stop FIRST: its terminal "disconnected" callback
             # must never land after the replacement's "ready".
             old = broker.actor
-            old.stop()
+            await stop_device(old)
+            if old.close_hung:
+                broker.manager.set_serial_detail("Serial close blocked; restart the application")
+                return
             if broker._open_serial():
                 self._serial_attempts += 1
                 logger.info(
@@ -1024,7 +1082,17 @@ class DeviceSupervisor:
 
     async def _maybe_restart_capture(self) -> None:
         broker = self._broker
+        low_power = bool(
+            broker.actor
+            and broker.actor.device_info
+            and broker.actor.device_info.get("video_low_power_enable_raw") == 1
+        )
         if broker.capture is None:
+            if low_power:
+                broker.manager.set_video_detail(
+                    "Video low power enabled; disable in local device settings to reconnect"
+                )
+                return
             # First attach: same bounded ladder as the serial side.
             if broker.clock.now < self._capture_retry_at:
                 return
@@ -1039,6 +1107,8 @@ class DeviceSupervisor:
                 )
             return
         capture = broker.capture
+        if callable(getattr(capture, "check_health", None)):
+            capture.check_health()
         status = getattr(capture, "status", None)
         fault_reason = getattr(capture, "fault_reason", None) or getattr(capture, "fault", None)
         if fault_reason in ("capture_close_hung", "close_hung"):
@@ -1047,8 +1117,9 @@ class DeviceSupervisor:
             if status != "fault" or not fault_reason:
                 return
             broker.manager.set_video_status(DeviceStatus.FAULT)
+            broker.manager.set_video_detail(str(fault_reason))
             try:
-                capture.stop()
+                await stop_device(capture)
             except Exception:
                 logger.exception("capture close failed; replacement refused")
                 return
@@ -1063,6 +1134,11 @@ class DeviceSupervisor:
                 broker.clock.now
                 + self.BACKOFF_S[min(self._capture_attempts, len(self.BACKOFF_S) - 1)]
             )
+        if low_power:
+            broker.manager.set_video_detail(
+                "Video low power enabled; disable in local device settings to reconnect"
+            )
+            return
         if broker.clock.now < self._capture_retry_at:
             return
         self._capture_attempts += 1
@@ -1075,7 +1151,7 @@ class DeviceSupervisor:
             logger.info("capture restarted after fault (attempt %d)", self._capture_attempts)
         except Exception:
             if replacement is not None:
-                replacement.stop()
+                await stop_device(replacement)
             self._capture_retry_at = (
                 broker.clock.now
                 + self.BACKOFF_S[min(self._capture_attempts, len(self.BACKOFF_S) - 1)]

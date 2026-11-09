@@ -21,6 +21,7 @@ from superuse.core.errors import ControlError, ErrorCode
 from superuse.core.frames import FrameHub
 from superuse.core.models import CommandEnvelope, Lease, WireError
 from superuse.core.scheduler import InputScheduler
+from superuse.server.idempotency import RequestCache, idempotent_control
 from superuse.server.sessions import (
     BROWSER_COOKIE,
     SESSION_TTL_S,
@@ -91,6 +92,7 @@ class Api:
         device_control=None,
         device_restart=None,
         device_info_provider=None,
+        management=None,
     ) -> None:
         self.config = config
         self.manager = manager
@@ -109,7 +111,9 @@ class Api:
         # Broker.device_diagnostics: sanitized device-info summary or None
         # while no reply has landed (simulated source stays absent).
         self.device_info_provider = device_info_provider
+        self.management = management
         self.port = 0
+        self.control_requests = RequestCache()
 
     # ------------------------------------------------------------------
     # Middleware: host/origin checks, body limits, auth
@@ -141,7 +145,7 @@ class Api:
 
     @staticmethod
     async def parse_json_object(request: web.Request) -> dict:
-        raw = await request.read() if request.can_read_body else b""
+        raw = await request.read()
         if not raw:
             return {}
         try:
@@ -365,6 +369,7 @@ class Api:
                 response["device"] = device
         return json_response(response)
 
+    @idempotent_control
     async def control_acquire(self, request: web.Request) -> web.Response:
         session = self.auth_agent(request)
         body = await self.parse_json_object(request)
@@ -392,6 +397,7 @@ class Api:
 
         return max(1, int((record.expires_at - time.monotonic()) * 1000))
 
+    @idempotent_control
     async def control_renew(self, request: web.Request) -> web.Response:
         # Lease owner renew: agents (bearer) and the owning human page
         # (cookie+page+CSRF) both renew the same way.
@@ -407,6 +413,7 @@ class Api:
         expires_ms = await self.manager.renew(session, lease, ttl)
         return json_response({"expires_in_ms": expires_ms})
 
+    @idempotent_control
     async def control_release(self, request: web.Request) -> web.Response:
         session = self.auth_agent(request)
         body = await self.parse_json_object(request)
@@ -417,6 +424,7 @@ class Api:
         state = await self.manager.release_control(session, lease)
         return json_response(state.to_wire())
 
+    @idempotent_control
     async def control_takeover(self, request: web.Request) -> web.Response:
         session = self.auth_browser_page(request, require_csrf=True)
         body = await self.parse_json_object(request)
@@ -436,6 +444,7 @@ class Api:
             }
         )
 
+    @idempotent_control
     async def control_handback(self, request: web.Request) -> web.Response:
         session = self.auth_browser_page(request, require_csrf=True)
         body = await self.parse_json_object(request)
@@ -445,12 +454,13 @@ class Api:
         state = await self.manager.handback(session)
         return json_response(state.to_wire())
 
+    @idempotent_control
     async def device_mouse_mode(self, request: web.Request) -> web.Response:
         """Human-only, local-entry device coordinate-mode switch (CSRF)."""
         self.auth_browser_page(request, require_csrf=True)
         body = await self.parse_json_object(request)
-        if set(body) != {"mode"}:
-            raise ControlError(ErrorCode.INVALID_REQUEST, "Expected {mode}")
+        if set(body) != {"mode", "request_id"}:
+            raise ControlError(ErrorCode.INVALID_REQUEST, "Expected {request_id, mode}")
         mode = body["mode"]
         raw = {"absolute": 2, "relative": 1}.get(mode) if isinstance(mode, str) else None
         if raw is None:
@@ -461,6 +471,7 @@ class Api:
         device = self.device_info_provider() if self.device_info_provider else None
         return json_response({"mouse_mode": mode, "state": state, "device": device})
 
+    @idempotent_control
     async def device_restart(self, request: web.Request) -> web.Response:
         """Human-only, local-entry device restart (CSRF).
 
@@ -470,12 +481,68 @@ class Api:
         """
         self.auth_browser_page(request, require_csrf=True)
         body = await self.parse_json_object(request)
-        if body:
-            raise ControlError(ErrorCode.INVALID_REQUEST, "Restart takes no fields")
+        if set(body) != {"request_id"}:
+            raise ControlError(ErrorCode.INVALID_REQUEST, "Expected {request_id}")
         if self.device_restart_control is None:  # pragma: no cover - broker wires it
             raise ControlError(ErrorCode.DEVICE_UNAVAILABLE, "Device restart not wired")
         state = await self.device_restart_control()
         return json_response({"restarted": True, "state": state})
+
+    async def device_overview(self, request: web.Request) -> web.Response:
+        self.auth_browser_page(request, require_csrf=False)
+        return json_response(self.management.overview())
+
+    async def device_discover(self, request: web.Request) -> web.Response:
+        self.auth_browser_page(request, require_csrf=False)
+        return json_response(await self.management.discover())
+
+    async def device_logs(self, request: web.Request) -> web.Response:
+        self.auth_browser_page(request, require_csrf=False)
+        return json_response(self.management.logs())
+
+    @idempotent_control
+    async def device_action(self, request: web.Request) -> web.Response:
+        self.auth_browser_page(request, require_csrf=True)
+        body = await self.parse_json_object(request)
+        if set(body) != {"request_id", "operation", "value"}:
+            raise ControlError(
+                ErrorCode.INVALID_REQUEST, "Expected request_id, operation and value"
+            )
+        operation, value = body["operation"], body["value"]
+        service = self.management
+        if operation == "connection" and isinstance(value, dict):
+            result = await service.configure(value)
+        elif operation == "refresh" and value is None:
+            result = await service.refresh()
+        elif operation in ("video_low_power", "mouse_auto_move"):
+            result = await service.set_boolean(operation, value)
+        elif operation == "keep_awake":
+            result = await service.broker.set_keep_awake(value)
+        elif operation == "logs" and isinstance(value, dict) and set(value) <= {"enabled", "clear"}:
+            if "clear" in value and type(value["clear"]) is not bool:
+                raise ControlError(ErrorCode.INVALID_REQUEST, "clear must be a boolean")
+            result = service.logs(value.get("enabled"), value.get("clear", False))
+        elif operation == "calibration_detect" and value is None:
+            result = await service.detect_calibration()
+        elif operation == "calibration":
+            result = await service.calibrate(value)
+        else:
+            raise ControlError(
+                ErrorCode.INVALID_REQUEST, "Unknown management operation or invalid value"
+            )
+        return json_response(result)
+
+    async def screenshot_png(self, request: web.Request) -> web.Response:
+        self.auth_browser_page(request, require_csrf=False)
+        data = await self.hub.png_snapshot(freshness_s=self.config.freshness_s)
+        return web.Response(
+            body=data,
+            content_type="image/png",
+            headers={
+                "Content-Disposition": 'attachment; filename="Superuse-screenshot.png"',
+                "Cache-Control": "no-store",
+            },
+        )
 
     async def post_command(self, request: web.Request) -> web.Response:
         session = self.auth_any(request, require_csrf=True)
@@ -534,6 +601,7 @@ class Api:
     _STATIC_TYPES = {
         "index.html": "text/html; charset=utf-8",
         "app.js": "application/javascript; charset=utf-8",
+        "settings.js": "application/javascript; charset=utf-8",
         "app.css": "text/css; charset=utf-8",
         "icon.svg": "image/svg+xml",
     }
@@ -580,12 +648,18 @@ class Api:
         app.router.add_post("/v1/control/handback", self.control_handback)
         app.router.add_post("/v1/device/mouse-mode", self.device_mouse_mode)
         app.router.add_post("/v1/device/restart", self.device_restart)
+        app.router.add_get("/v1/device/overview", self.device_overview)
+        app.router.add_get("/v1/device/discover", self.device_discover)
+        app.router.add_get("/v1/device/logs", self.device_logs)
+        app.router.add_post("/v1/device/action", self.device_action)
+        app.router.add_get("/v1/frames/screenshot.png", self.screenshot_png)
         app.router.add_post("/v1/commands", self.post_command)
         app.router.add_get("/v1/jobs/{job_id}", self.get_job)
         app.router.add_post("/v1/jobs/{job_id}/cancel", self.cancel_job)
         app.router.add_get("/v1/frames/latest", self.frames_latest)
         app.router.add_get("/", self.index)
         app.router.add_get("/app.js", lambda r: self._static(r, "app.js"))
+        app.router.add_get("/settings.js", lambda r: self._static(r, "settings.js"))
         app.router.add_get("/app.css", lambda r: self._static(r, "app.css"))
         app.router.add_get("/icon.svg", lambda r: self._static(r, "icon.svg"))
         return app

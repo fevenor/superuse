@@ -162,17 +162,20 @@ class OwnerInputState:
     hid_x: int = 2048
     hid_y: int = 2048
     relative_mouse: bool = False
+    mouse_initialized: bool = False
 
     def apply(self, report: InputReport) -> None:
         if isinstance(report, KeyboardReport):
             self.modifier = report.modifier
             self.keys = frozenset(k for k in report.keys if k)
         elif isinstance(report, MouseAbsReport):
+            self.mouse_initialized = True
             self.buttons = report.buttons
             self.hid_x = report.x
             self.hid_y = report.y
             self.relative_mouse = False
         elif isinstance(report, MouseRelReport):
+            self.mouse_initialized = True
             self.buttons = report.buttons
             self.relative_mouse = True
 
@@ -405,6 +408,17 @@ class InputScheduler:
             # Resolvable now (fail before first packet) and re-checked per step.
             self._bases.resolve(action.basis_id, self._clock.now)
             self._manager.check_absolute_mouse()
+        elif isinstance(
+            action,
+            (
+                MouseMoveRelative,
+                MouseClickRelative,
+                MouseDragRelative,
+                MouseScrollRelative,
+                MouseRelativeState,
+            ),
+        ):
+            self._manager.check_relative_mouse()
 
     @staticmethod
     def _check_code(code: str) -> None:
@@ -507,14 +521,12 @@ class InputScheduler:
         if isinstance(action, MouseState):
             return [Step(lambda now, a=action: self._abs(a.basis_id, a.x, a.y, a.buttons, now))]
         if isinstance(action, ReleaseInputs):
-            return [
-                Step(lambda now: KeyboardReport(0, ()), priority=True, fresh_video=False),
-                Step(
-                    lambda now: state.mouse_release(),
-                    priority=True,
-                    fresh_video=False,
-                ),
-            ]
+            steps = [Step(lambda now: KeyboardReport(0, ()), priority=True, fresh_video=False)]
+            if state.mouse_initialized:
+                steps.append(
+                    Step(lambda now: state.mouse_release(), priority=True, fresh_video=False)
+                )
+            return steps
         raise ControlError(ErrorCode.INVALID_REQUEST, f"Cannot expand {action.kind}")
 
     @staticmethod
@@ -624,7 +636,7 @@ class InputScheduler:
                     )
                     break
                 try:
-                    await self._write(session, lease, report, step.priority)
+                    await self._write(session, lease, report, step.priority, deadline=deadline)
                 except ControlError as exc:
                     if exc.code in _SUPERSEDED_CODES:
                         superseded = True
@@ -690,22 +702,34 @@ class InputScheduler:
         try:
             self._manager.authorize_input(session, lease, require_fresh_video=False)
             state = self._owner_states.get(session.session_id)
-            mouse = state.mouse_release() if state else MouseRelReport(0, 0, 0, 0)
+            mouse = state.mouse_release() if state and state.mouse_initialized else None
             await self._write(session, lease, KeyboardReport(0, ()), priority=True)
-            await self._write(session, lease, mouse, priority=True)
+            if mouse is not None:
+                await self._write(session, lease, mouse, priority=True)
             if state is not None:
                 state.apply(KeyboardReport(0, ()))
-                state.apply(mouse)
+                if mouse is not None:
+                    state.apply(mouse)
         except Exception as exc:  # owner changed or device gone: fence handles it
             logger.debug("owner neutralization skipped: %r", exc)
 
-    async def _write(self, session: Session, lease, report: InputReport, priority: bool):
+    async def _write(
+        self,
+        session: Session,
+        lease,
+        report: InputReport,
+        priority: bool,
+        *,
+        deadline: float = float("inf"),
+    ):
         authorized = AuthorizedReport(
             session_id=session.session_id,
             lease_id=lease.lease_id,
             generation=lease.generation,
             report=report,
             priority=priority,
+            instance_id=lease.instance_id,
+            deadline=deadline,
         )
         if priority:
             future = self._actor.submit(authorized)
@@ -723,6 +747,15 @@ class InputScheduler:
                 self._inflight_reports -= 1
         if outcome.ok:
             return
+        if outcome.error in (
+            "VIDEO_STALE",
+            "LEASE_EXPIRED",
+            "ACTION_TIMEOUT",
+            "DEVICE_UNAVAILABLE",
+        ):
+            raise ControlError(
+                ErrorCode(outcome.error), "Report authorization expired before write"
+            )
         error_map = {
             "REVOKED": (ErrorCode.CONTROL_REVOKED, "Report superseded by control change"),
             "BACKPRESSURE": (
@@ -950,6 +983,7 @@ class HumanInputStream:
             hid_x, hid_y = map_point(basis, action.x, action.y)
             report = MouseAbsReport(action.buttons, hid_x, hid_y, 0)
         elif isinstance(action, MouseRelativeState):
+            self._manager.check_relative_mouse()
             report = MouseRelReport(action.buttons, action.dx, action.dy, action.wheel)
         elif isinstance(action, MouseScroll):
             self._manager.check_absolute_mouse()
@@ -961,11 +995,21 @@ class HumanInputStream:
         authorized = AuthorizedReport(
             session_id=self._session.session_id,
             lease_id=envelope.lease.lease_id,
+            instance_id=envelope.lease.instance_id,
             generation=envelope.lease.generation,
             report=report,
         )
         outcome = await self._scheduler._actor.submit(authorized)
         if not outcome.ok:
+            if outcome.error in (
+                "VIDEO_STALE",
+                "LEASE_EXPIRED",
+                "ACTION_TIMEOUT",
+                "DEVICE_UNAVAILABLE",
+            ):
+                raise ControlError(
+                    ErrorCode(outcome.error), "Report authorization expired before write"
+                )
             if outcome.error == "REVOKED":
                 raise ControlError(ErrorCode.CONTROL_REVOKED, "Report superseded")
             if outcome.error == "MOUSE_MODE":

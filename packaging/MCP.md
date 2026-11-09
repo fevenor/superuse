@@ -101,7 +101,7 @@ lan_host = "0.0.0.0"
 | `capture_screen` | 新鲜截图及同帧 metadata；`max_width` 默认 1280，可选 320–1920；不会续租 |
 | `acquire_control` / `release_control` | 显式申请/释放本 agent 的租约 |
 | `press_key` | 物理键码，如 `KeyA`、`Enter`；组合键使用 `modifiers`，准确枚举以 tools/list 为准 |
-| `type_text` | US ASCII、换行和 TAB，1–512 字符；不支持任意 Unicode、粘贴或花括号快捷键模板 |
+| `type_text` | US ASCII、换行和 TAB，1–512 字符；全量预校验后自动按最多 64 字符分段，顺序执行并报告进度；不支持任意 Unicode、粘贴或快捷键模板 |
 | `mouse_move` / `mouse_click` / `mouse_drag` / `mouse_scroll` | 绝对模式：传当前截图 metadata 的 `basis_id` 和该截图的图片像素坐标 |
 | `mouse_move_relative` / `mouse_drag_relative` | `dx`、`dy` 是 HID 相对计数，不是图片像素；小幅移动后看图确认 |
 | `mouse_click_relative` / `mouse_scroll_relative` | 在目标当前指针位置点击/滚动；不会隐式移动 |
@@ -111,6 +111,8 @@ lan_host = "0.0.0.0"
 绝对坐标必须依据 agent 实际收到的缩放图片，不能直接使用目标原生分辨率、浏览器 CSS 像素或其他会话的旧 basis。目标不兼容绝对鼠标时使用 `*_relative` 工具；不能累计相对计数假定当前绝对位置。
 
 `completion="written"` 只表示控制端完整写入了报告，不代表目标 UI 已执行成功。成功与否要通过新截图核实。可选只读资源 `superuse://state` 用于查看状态；它不会自动申请控制，也不保证能唤醒空闲 agent。
+
+`type_text` 每段仍有 30 秒 deadline，整个调用最多 120 秒。MCP 宿主的调用超时需大于 120 秒并留出传输时间；若宿主超时较短，每次提交不超过 64 字符。支持进度通知的宿主会收到已完成字符数，不含文本正文。成功结果附 `characters_written`、`chunks_completed` 和 `job_ids`。失败会报告确认完成的字符数及当前段是否结果不确定；先观察目标，不得重试整段。字符计数按 CRLF/CR 转 LF 后计算；完整字符计数仅涵盖按下和释放均已写入的字符。写入失败时可能另有未确认释放的按键，不能盲目根据计数续写。
 
 ## 6. 常见故障
 
