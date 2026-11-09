@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import threading
 import webbrowser
 from collections.abc import Callable
@@ -17,6 +18,27 @@ from collections.abc import Callable
 from superuse.core.models import Mode
 
 logger = logging.getLogger(__name__)
+
+
+def _create_icon(*args, **kwargs):
+    """Windows 菜单显示前读取最新状态，避免异步操作后的旧勾选状态。"""
+    import pystray
+
+    if sys.platform != "win32":
+        return pystray.Icon(*args, **kwargs)
+
+    from pystray._util import win32
+
+    class CurrentMenuIcon(pystray.Icon):
+        def _on_notify(self, wparam, lparam):
+            # pystray 0.19.5 只在点击回调返回时刷新，后台任务此时可能尚未完成。
+            # 在托盘线程弹出菜单前重建，网页修改和异步失败也读取实际状态。
+            if lparam == win32.WM_RBUTTONUP:
+                self.update_menu()
+            return super()._on_notify(wparam, lparam)
+
+    return CurrentMenuIcon(*args, **kwargs)
+
 
 STATE_LABELS = {
     Mode.IDLE: "待连接/空闲",
@@ -77,23 +99,21 @@ class TrayApp:
     # -- thread-safe dispatch ---------------------------------------------
 
     def _dispatch(self, fn: Callable, *args) -> None:
-        """Run a (possibly async) handler as a task on the broker loop.
+        """在服务循环中执行回调，并统一记录同步及异步失败。
 
-        Handlers must never block the loop: async handlers are scheduled, and
-        sync handlers must stay cheap. Waiting on a coroutine from the loop
-        thread itself (.result()) would deadlock video/renewal processing
-        (review R07).
+        异步回调使用 await，不能同步等待 Future.result()，以免阻塞视频和续租。
+        同步回调仍须保持轻量。
         """
 
-        def _run() -> None:
+        async def _run() -> None:
             try:
                 result = fn(*args)
                 if asyncio.iscoroutine(result):
-                    asyncio.ensure_future(result)
+                    await result
             except Exception:
-                logger.exception("tray action failed")
+                logger.exception("托盘操作失败")
 
-        self._loop.call_soon_threadsafe(_run)
+        self._loop.call_soon_threadsafe(lambda: asyncio.ensure_future(_run()))
 
     def open_ui_clicked(self, _, __) -> None:
         self._dispatch(self._on_open_ui)
@@ -165,7 +185,6 @@ class TrayApp:
 
     def run(self) -> None:
         """Block the main thread in the tray message loop until quit."""
-        import pystray
         from PIL import Image
 
         image = (
@@ -173,7 +192,7 @@ class TrayApp:
             if self._icon_path
             else Image.new("RGB", (64, 64), (22, 33, 62))
         )
-        self._icon = pystray.Icon(
+        self._icon = _create_icon(
             "superuse",
             icon=image,
             title="Superuse",
